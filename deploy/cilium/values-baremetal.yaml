@@ -1,0 +1,8 @@
+ipam:
+  mode: kubernetes
+routingMode: tunnel
+tunnelProtocol: vxlan
+bpf:
+  masquerade: true
+# MetalLB allocates the Gateway's LoadBalancer address. Cilium owns pod networking,
+# policy, kube-proxy replacement, Envoy, and Gateway API routing.

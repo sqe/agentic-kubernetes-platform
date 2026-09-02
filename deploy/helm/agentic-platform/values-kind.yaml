@@ -1,0 +1,33 @@
+image: {repository: agentic-platform-runtime, tag: dev, pullPolicy: IfNotPresent}
+kafka: {bootstrapServers: "kafka.messaging.svc:9092", securityProtocol: PLAINTEXT}
+services:
+  registry: {replicas: 1}
+  supervisor: {replicas: 1}
+  weather: {replicas: 1}
+  knowledge-api:
+    replicas: 1
+    extraEnv:
+      - {name: NEO4J_URI, value: "bolt://neo4j:7687"}
+      - {name: OBJECT_STORE_ENDPOINT, value: "http://rustfs:9000"}
+      - {name: OBJECT_STORE_BUCKET, value: agent-documents}
+      - {name: QDRANT_URL, value: "http://qdrant:6333"}
+      - name: QDRANT_API_KEY
+        valueFrom: {secretKeyRef: {name: platform-qdrant-secret, key: api-key}}
+      - name: NEO4J_PASSWORD
+        valueFrom: {secretKeyRef: {name: knowledge-secrets, key: neo4j-password}}
+  knowledge-worker:
+    replicas: 0
+    nodeSelector: {}
+    tolerations: []
+postgresql: {enabled: true, storage: 2Gi}
+qdrant: {enabled: true, storage: 2Gi}
+neo4j: {enabled: true, storage: 2Gi}
+redis: {enabled: true, storage: 1Gi}
+keycloak:
+  enabled: true
+  mode: operator
+  storage: 2Gi
+gateway:
+  enabled: true
+  http: {enabled: true, port: 80}
+  https: {enabled: false, port: 443, certificateRefs: []}

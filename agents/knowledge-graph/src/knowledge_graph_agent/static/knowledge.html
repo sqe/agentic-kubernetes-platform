@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Interactive 2D and 3D knowledge graph explorer">
+  <title>Knowledge Graph Explorer</title>
+  <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/3d-force-graph@1.79.0/dist/3d-force-graph.min.js"></script>
+  <style>
+    :root { color-scheme: dark; font: 15px system-ui; background: #070b16; color: #e8eefc; }
+    * { box-sizing: border-box; }
+    body { margin: 0; display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
+    aside { padding: 20px; border-right: 1px solid #26334f; overflow: auto; background: #0c1324; }
+    h1 { margin-top: 0; font-size: 20px; }
+    label { display: block; margin: 14px 0 5px; color: #9fb0d0; }
+    input, textarea, select, button { width: 100%; padding: 9px; border-radius: 6px; border: 1px solid #344564; background: #101a30; color: inherit; }
+    textarea { min-height: 130px; resize: vertical; }
+    button { margin-top: 8px; cursor: pointer; background: #3157d5; border: 0; font-weight: 650; }
+    .row { display: flex; gap: 8px; }
+    .row button { width: auto; flex: 1; }
+    #status { white-space: pre-wrap; font-size: 12px; color: #9fb0d0; }
+    main, #graph { width: 100%; height: 100%; }
+    #details { position: fixed; top: 16px; right: 16px; max-width: 320px; max-height: 45vh; overflow: auto; padding: 14px; border: 1px solid #344564; border-radius: 8px; background: #0c1324ee; white-space: pre-wrap; font-size: 12px; display: none; z-index: 10; }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Knowledge Graph Explorer</h1>
+    <p>Ingest a document in the background, then explore entities and trace relationships.</p>
+    <div class="row"><button id="login" onclick="authorize(false)">Log in</button><button id="signup" onclick="authorize(true)">Create account</button></div>
+    <button id="logout" onclick="logout()" hidden>Log out</button>
+    <p id="identity">Not signed in</p>
+    <label for="title">Document title</label><input id="title" value="Space telescope research">
+    <label for="ontology">Ontology</label><select id="ontology"></select>
+    <label for="text">Document text</label><textarea id="text" placeholder="Paste extracted document text"></textarea>
+    <button onclick="ingest()">Queue ingestion</button>
+    <label for="file">Or upload PDF, text, or JSON</label><input id="file" type="file" accept=".pdf,.txt,.json">
+    <button onclick="upload()">Upload and queue</button>
+    <label for="query">Entity search</label><input id="query" placeholder="telescope">
+    <button onclick="search()">Search graph</button>
+    <button onclick="browse()">Browse graph</button>
+    <button onclick="semanticSearch()">Search document meaning</button>
+    <label for="typeFilter">Entity type</label><select id="typeFilter" onchange="draw()"><option value="">All types</option></select>
+    <label>Trace shortest path</label>
+    <input id="source" placeholder="Source entity"><input id="target" placeholder="Target entity">
+    <button onclick="tracePath()">Trace path</button>
+    <div class="row"><button onclick="setMode('2d')">2D</button><button onclick="setMode('3d')">3D</button></div>
+    <p id="status"></p>
+  </aside>
+  <main><div id="graph"></div><div id="details"></div></main>
+  <script>
+    let mode = '2d', current = {nodes: [], edges: []}, renderer, ontologyTypes = {}, authConfig;
+    const token = () => sessionStorage.getItem('id_token') || '';
+    const headers = () => token() ? {'Content-Type': 'application/json', Authorization: `Bearer ${token()}`} : {'Content-Type': 'application/json'};
+    const status = value => document.querySelector('#status').textContent = value;
+    const redirectUri = () => `${location.origin}${location.pathname}`;
+    const base64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    function randomValue() { return base64url(crypto.getRandomValues(new Uint8Array(32))); }
+    async function authorize(signupRequested) {
+      const verifier = randomValue(), state = randomValue();
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+      sessionStorage.setItem('pkce_verifier', verifier); sessionStorage.setItem('oauth_state', state);
+      const endpoint = signupRequested && authConfig.registration_endpoint ? authConfig.registration_endpoint : authConfig.authorization_endpoint;
+      const target = new URL(endpoint);
+      const values = {client_id: authConfig.client_id, response_type: 'code', redirect_uri: redirectUri(), scope: authConfig.scope, state, code_challenge: base64url(digest), code_challenge_method: 'S256'};
+      Object.entries(values).forEach(([key, value]) => target.searchParams.set(key, value));
+      if (signupRequested) target.searchParams.set('screen_hint', 'signup');
+      location.assign(target);
+    }
+    async function completeLogin() {
+      const params = new URLSearchParams(location.search), code = params.get('code');
+      if (!code) return;
+      if (params.get('state') !== sessionStorage.getItem('oauth_state')) throw new Error('Invalid login state');
+      const body = new URLSearchParams({grant_type: 'authorization_code', client_id: authConfig.client_id, code, redirect_uri: redirectUri(), code_verifier: sessionStorage.getItem('pkce_verifier') || ''});
+      const response = await fetch(authConfig.token_endpoint, {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body});
+      const result = await response.json(); if (!response.ok) throw new Error(result.error_description || 'Login failed');
+      sessionStorage.setItem('id_token', result.id_token || result.access_token);
+      sessionStorage.setItem('logout_hint', result.id_token || '');
+      sessionStorage.removeItem('pkce_verifier'); sessionStorage.removeItem('oauth_state');
+      history.replaceState({}, '', location.pathname);
+    }
+    function showIdentity() {
+      const value = token(); login.hidden = signup.hidden = Boolean(value); logout.hidden = !value;
+      if (!value) { identity.textContent = authConfig?.enabled ? 'Not signed in' : 'Local development mode'; return; }
+      try { const claims = JSON.parse(atob(value.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))); identity.textContent = claims.email || claims.preferred_username || claims.sub; }
+      catch { identity.textContent = 'Signed in'; }
+    }
+    function logout() {
+      const hint = sessionStorage.getItem('logout_hint'); sessionStorage.clear();
+      if (!authConfig.logout_endpoint) { location.reload(); return; }
+      const target = new URL(authConfig.logout_endpoint);
+      target.searchParams.set('client_id', authConfig.client_id);
+      target.searchParams.set('logout_uri', redirectUri());
+      target.searchParams.set('post_logout_redirect_uri', redirectUri());
+      if (hint) target.searchParams.set('id_token_hint', hint);
+      location.assign(target);
+    }
+    async function request(url, options = {}) {
+      const response = await fetch(url, {...options, headers: headers()});
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || JSON.stringify(body));
+      return body;
+    }
+    async function ingest() {
+      try {
+        const body = {document_id: crypto.randomUUID(), title: title.value, text: text.value, ontology: ontology.value};
+        status(JSON.stringify(await request('/v1/knowledge/documents', {method: 'POST', body: JSON.stringify(body)}), null, 2));
+      } catch (error) { status(error.message); }
+    }
+    async function upload() {
+      try {
+        const form = new FormData(); form.append('title', title.value); form.append('ontology', ontology.value); form.append('file', file.files[0]);
+        const response = await fetch('/v1/knowledge/documents/upload', {
+          method: 'POST', headers: token() ? {Authorization: `Bearer ${token()}`} : {}, body: form
+        });
+        const body = await response.json(); if (!response.ok) throw new Error(body.detail || JSON.stringify(body));
+        status(JSON.stringify(body, null, 2));
+      } catch (error) { status(error.message); }
+    }
+    async function search() {
+      try { current = await request(`/v1/knowledge/search?q=${encodeURIComponent(query.value)}&ontology=${encodeURIComponent(ontology.value)}`); draw(); }
+      catch (error) { status(error.message); }
+    }
+    async function browse() {
+      try {
+        const type = typeFilter.value ? `&entity_type=${encodeURIComponent(typeFilter.value)}` : '';
+        current = await request(`/v1/knowledge/graph?ontology=${encodeURIComponent(ontology.value)}&limit=500${type}`);
+        draw();
+      } catch (error) { status(error.message); }
+    }
+    async function semanticSearch() {
+      try {
+        const result = await request(`/v1/knowledge/semantic-search?q=${encodeURIComponent(query.value)}&ontology=${encodeURIComponent(ontology.value)}`);
+        status(result.results.map(item => `${Number(item.score).toFixed(3)} · ${item.payload.title}\n${item.payload.chunk}`).join('\n\n') || 'No semantic matches');
+      } catch (error) { status(error.message); }
+    }
+    async function tracePath() {
+      try { current = await request(`/v1/knowledge/path?source=${encodeURIComponent(source.value)}&target=${encodeURIComponent(target.value)}&ontology=${encodeURIComponent(ontology.value)}`); draw(); }
+      catch (error) { status(error.message); }
+    }
+    function setMode(value) { mode = value; draw(); }
+    function draw() {
+      const selectedType = typeFilter.value;
+      const nodes = current.nodes.filter(n => !selectedType || n.type === selectedType);
+      const nodeIds = new Set(nodes.map(n => n.id));
+      const edges = current.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+      document.querySelector('#graph').replaceChildren();
+      if (mode === '2d') {
+        renderer = cytoscape({container: graph, elements: [
+          ...nodes.map(n => ({data: {...n, id: n.id, label: n.name, color: ontologyTypes[n.type]?.color || '#5b8cff'}})),
+          ...edges.map((e, i) => ({data: {...e, id: `e${i}`, label: e.type}}))
+        ], style: [
+          {selector: 'node', style: {'label': 'data(label)', 'background-color': 'data(color)', 'color': '#fff', 'text-valign': 'bottom', 'text-margin-y': 7, 'width': 'mapData(degree, 0, 20, 24, 56)', 'height': 'mapData(degree, 0, 20, 24, 56)'}},
+          {selector: 'edge', style: {'label': 'data(label)', 'line-color': '#536887', 'target-arrow-shape': 'triangle', 'target-arrow-color': '#536887', 'curve-style': 'bezier', 'font-size': 10, 'color': '#aebbd1'}}
+        ], layout: {name: 'cose', animate: false}});
+        renderer.nodes().forEach(node => node.data('degree', node.degree()));
+        renderer.on('tap', 'node, edge', event => showDetails(event.target.data()));
+      } else {
+        renderer = ForceGraph3D()(graph).backgroundColor('#070b16').graphData({
+          nodes: nodes.map(n => ({...n, id: n.id})),
+          links: edges.map(e => ({source: e.source, target: e.target, label: e.type}))
+        }).nodeLabel(n => `${n.name} (${n.type})`).nodeColor(n => ontologyTypes[n.type]?.color || '#5b8cff')
+          .nodeVal(n => 2 + edges.filter(e => e.source === n.id || e.target === n.id).length)
+          .linkDirectionalArrowLength(4).linkDirectionalParticles(2).linkDirectionalParticleSpeed(0.004)
+          .onNodeClick(n => { showDetails(n); renderer.cameraPosition({x: n.x + 100, y: n.y + 100, z: n.z + 100}, n, 800); })
+          .onLinkClick(link => showDetails(link));
+      }
+      status(`${nodes.length} nodes, ${edges.length} relationships`);
+    }
+    function showDetails(value) {
+      details.textContent = JSON.stringify(value, null, 2); details.style.display = 'block';
+    }
+    async function loadOntologies() {
+      try {
+        const result = await request('/v1/knowledge/ontologies');
+        for (const item of result.ontologies) {
+          ontology.add(new Option(`${item.id} (${item.version})`, item.id));
+        }
+        ontology.value = 'astronomy';
+        ontology.addEventListener('change', selectOntology);
+        await selectOntology();
+      } catch (error) { status(error.message); }
+    }
+    async function selectOntology() {
+      const selected = await request(`/v1/knowledge/ontologies/${encodeURIComponent(ontology.value)}`);
+      ontologyTypes = Object.fromEntries(selected.entity_types.map(item => [item.id, item]));
+      typeFilter.replaceChildren(new Option('All types', ''));
+      selected.entity_types.forEach(item => typeFilter.add(new Option(item.label, item.id)));
+      await browse();
+    }
+    async function initialize() {
+      try {
+        authConfig = await fetch('/auth/config').then(response => response.json());
+        if (authConfig.enabled) await completeLogin();
+        showIdentity();
+        if (token()) await request('/v1/users/me');
+        if (!authConfig.enabled || token()) await loadOntologies();
+        else status('Log in or create an account to explore the graph.');
+      } catch (error) { status(error.message); }
+    }
+    initialize();
+  </script>
+</body>
+</html>

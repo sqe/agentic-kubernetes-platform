@@ -1,0 +1,93 @@
+image: {repository: agentic-platform-runtime, tag: "0.1.0", pullPolicy: IfNotPresent}
+imagePullSecrets: []
+serviceAccount: {create: true, name: "", annotations: {}}
+kafka: {bootstrapServers: "", securityProtocol: PLAINTEXT}
+mlflow: {trackingUri: ""}
+services:
+  registry:
+    replicas: 1
+    port: 8001
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}]
+    resources: {requests: {cpu: 50m, memory: 96Mi}, limits: {cpu: 500m, memory: 256Mi}}
+  supervisor:
+    replicas: 2
+    port: 8002
+    serviceType: ClusterIP
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}]
+    resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+  weather:
+    replicas: 2
+    port: 8100
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}]
+    resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+  knowledge-api:
+    replicas: 1
+    port: 8200
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}, {secretRef: {name: knowledge-runtime-secrets}}]
+    extraEnv:
+      - {name: NEO4J_URI, value: "bolt://neo4j:7687"}
+      - {name: OBJECT_STORE_BUCKET, value: agent-documents}
+      - {name: QDRANT_URL, value: "http://qdrant:6333"}
+      - name: QDRANT_API_KEY
+        valueFrom: {secretKeyRef: {name: platform-qdrant-secret, key: api-key}}
+    resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+  knowledge-worker:
+    replicas: 0
+    port: 8201
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}, {secretRef: {name: knowledge-runtime-secrets}}]
+    extraEnv:
+      - {name: NEO4J_URI, value: "bolt://neo4j:7687"}
+      - {name: OBJECT_STORE_BUCKET, value: agent-documents}
+      - {name: QDRANT_URL, value: "http://qdrant:6333"}
+      - name: QDRANT_API_KEY
+        valueFrom: {secretKeyRef: {name: platform-qdrant-secret, key: api-key}}
+      - {name: OPENAI_BASE_URL, value: "http://specialist-model:8000"}
+      - {name: OPENAI_MODEL, value: "/models/model"}
+    nodeSelector: {workload: knowledge-extraction}
+    tolerations: [{key: workload, operator: Equal, value: knowledge-extraction, effect: NoSchedule}]
+    resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}
+autoscaling:
+  weather: {enabled: false, minReplicas: 1, maxReplicas: 20, lagThreshold: "10"}
+  knowledge: {enabled: false, minReplicas: 0, maxReplicas: 4, lagThreshold: "1"}
+modelFleetIntegration: {enabled: false}
+neo4j: {enabled: true, image: "neo4j:5.26-community", storage: 20Gi, storageClassName: "", existingSecret: knowledge-secrets}
+redis: {enabled: true, image: "redis:7.4.2-alpine", storage: 8Gi, storageClassName: "", existingSecret: platform-cache-secret}
+postgresql:
+  enabled: false
+  image: "postgres:17.6-alpine"
+  storage: 20Gi
+  storageClassName: ""
+  existingSecret: platform-postgresql-secret
+  resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}
+qdrant:
+  enabled: false
+  image: "qdrant/qdrant:v1.15.4"
+  storage: 30Gi
+  storageClassName: ""
+  existingSecret: platform-qdrant-secret
+  resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "2", memory: 4Gi}}
+keycloak:
+  enabled: false
+  mode: direct
+  image: "quay.io/keycloak/keycloak:26.3.2"
+  replicas: 1
+  existingSecret: keycloak-secrets
+  bootstrapAdminSecret: keycloak-bootstrap-admin
+  postgresImage: "postgres:17.6-alpine"
+  storage: 10Gi
+  storageClassName: ""
+monitoring: {serviceMonitor: {enabled: false}}
+networkPolicy: {enabled: false}
+gateway:
+  enabled: true
+  name: agentic-platform
+  className: cilium
+  hostnames: []
+  addresses: []
+  infrastructureAnnotations: {}
+  http: {enabled: true, port: 80}
+  https: {enabled: false, port: 443, certificateRefs: []}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: specialist-lora-training
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 90000
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: model-store
+      nodeSelector: {accelerator: nvidia}
+      initContainers:
+        - name: hydrate-inputs
+          image: model-store:0.1.0
+          args: [download, --prefix, training/example/]
+          env: [{name: MODEL_STORE_BUCKET, value: models}]
+          volumeMounts: [{name: workspace, mountPath: /models}]
+      containers:
+        - name: trainer
+          image: specialist-training:0.1.0
+          env:
+            - {name: MODEL_PATH, value: /models/base}
+            - {name: DATASET_PATH, value: /models/data/train.jsonl}
+            - {name: OUTPUT_PATH, value: /models/output}
+          resources: {limits: {nvidia.com/gpu: "1"}}
+          volumeMounts: [{name: workspace, mountPath: /models}]
+        - name: artifact-uploader
+          image: model-store:0.1.0
+          args:
+            - upload
+            - --prefix
+            - artifacts/example/
+            - --wait-for
+            - /models/output/.training-complete
+          env:
+            - {name: MODEL_STORE_BUCKET, value: models}
+            - {name: MODEL_STORE_PATH, value: /models/output}
+          volumeMounts: [{name: workspace, mountPath: /models}]
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: training-workspace}

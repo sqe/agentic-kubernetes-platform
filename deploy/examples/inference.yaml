@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: specialist-model
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: specialist-model}}
+  template:
+    metadata: {labels: {app: specialist-model}}
+    spec:
+      serviceAccountName: model-store
+      nodeSelector:
+        accelerator: nvidia
+        gpu-memory-class: 48gb
+      initContainers:
+        - name: hydrate-model
+          image: model-store:0.1.0
+          args: [download]
+          env:
+            - {name: MODEL_STORE_BUCKET, value: models}
+            - {name: MODEL_STORE_PREFIX, value: models/example/}
+            # Omit MODEL_STORE_ENDPOINT for AWS S3; set it to the RustFS API URL on bare metal.
+            - {name: MODEL_STORE_ENDPOINT, value: ""}
+          volumeMounts: [{name: models, mountPath: /models}]
+      containers:
+        - name: vllm
+          image: specialist-inference:0.1.0
+          args: [--model, /models/model, --tensor-parallel-size, "1", --gpu-memory-utilization, "0.90", --enable-prefix-caching]
+          ports: [{name: http, containerPort: 8000}]
+          resources:
+            limits: {nvidia.com/gpu: "1"}
+          volumeMounts: [{name: models, mountPath: /models, readOnly: true}]
+      volumes:
+        - name: models
+          persistentVolumeClaim: {claimName: model-cache}

@@ -1,0 +1,46 @@
+{{- if .Values.neo4j.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+spec:
+  selector: {app.kubernetes.io/name: neo4j}
+  ports:
+    - {name: http, port: 7474}
+    - {name: bolt, port: 7687}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j
+spec:
+  serviceName: neo4j
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: neo4j}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: neo4j}}
+    spec:
+      securityContext: {runAsNonRoot: true, fsGroup: 7474, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: neo4j
+          image: {{ .Values.neo4j.image | quote }}
+          ports:
+            - {name: http, containerPort: 7474}
+            - {name: bolt, containerPort: 7687}
+          env:
+            - name: NEO4J_AUTH
+              valueFrom: {secretKeyRef: {name: {{ .Values.neo4j.existingSecret }}, key: neo4j-auth}}
+          readinessProbe: {tcpSocket: {port: bolt}, initialDelaySeconds: 20, periodSeconds: 10}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.neo4j.storageClassName }}
+        storageClassName: {{ .Values.neo4j.storageClassName | quote }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.neo4j.storage }}}}
+{{- end }}

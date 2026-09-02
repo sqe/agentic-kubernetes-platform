@@ -1,0 +1,34 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 8001}
+        - {protocol: TCP, port: 8002}
+        - {protocol: TCP, port: 8100}
+        - {protocol: TCP, port: 8200}
+        - {protocol: TCP, port: 8201}
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6333}
+        - {protocol: TCP, port: 6334}
+  egress:
+    - to:
+        - namespaceSelector: {}
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {protocol: TCP, port: 443}
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- end }}

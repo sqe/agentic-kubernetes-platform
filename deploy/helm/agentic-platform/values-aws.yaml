@@ -1,0 +1,23 @@
+kafka:
+  bootstrapServers: kafka-kafka-bootstrap.messaging.svc:9092
+autoscaling:
+  weather:
+    enabled: true
+  knowledge:
+    enabled: true
+monitoring:
+  serviceMonitor:
+    enabled: true
+postgresql:
+  enabled: true
+qdrant:
+  enabled: true
+serviceAccount:
+  annotations:
+    # Set to the IRSA role created by infrastructure/aws.
+    eks.amazonaws.com/role-arn: arn:aws:iam::REPLACE_ACCOUNT_ID:role/REPLACE_ME
+gateway:
+  infrastructureAnnotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing

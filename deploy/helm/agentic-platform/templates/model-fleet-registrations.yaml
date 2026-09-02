@@ -1,0 +1,20 @@
+{{- if .Values.modelFleetIntegration.enabled }}
+apiVersion: fleet.sqe.io/v1alpha1
+kind: AgentRegistration
+metadata:
+  name: weather
+spec:
+  name: weather
+  description: Current conditions and forecasts from Open-Meteo
+  version: 1.0.0
+  endpoint: http://{{ include "agentic-platform.fullname" . }}-weather:8100
+  kafka_topic: tasks.weather
+  kafka_result_topic: results.weather
+  max_concurrent_tasks: 1
+  timeout_seconds: 30
+  skills:
+    - {id: weather.current, name: Current weather, description: Current weather for a location}
+    - {id: weather.forecast, name: Weather forecast, description: One-to-sixteen-day location forecast}
+  transports:
+    - {protocol: kafka, endpoint: tasks.weather}
+{{- end }}

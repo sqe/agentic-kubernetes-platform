@@ -1,0 +1,17 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+package_update: true
+package_upgrade: false
+users:
+  - default
+  - name: ${username}
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys: [${ssh_public_key}]
+packages: [qemu-guest-agent, curl, jq, nfs-common, open-iscsi]
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - usermod -aG sudo ${username}
+final_message: "Node ${hostname} initialized after $UPTIME seconds"

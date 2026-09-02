@@ -1,0 +1,40 @@
+{{- if .Values.autoscaling.weather.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-weather
+spec:
+  scaleTargetRef:
+    name: {{ include "agentic-platform.fullname" . }}-weather
+  minReplicaCount: {{ .Values.autoscaling.weather.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.weather.maxReplicas }}
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ required "kafka.bootstrapServers is required for KEDA" .Values.kafka.bootstrapServers | quote }}
+        consumerGroup: weather-agent
+        topic: tasks.weather
+        lagThreshold: {{ .Values.autoscaling.weather.lagThreshold | quote }}
+        offsetResetPolicy: earliest
+{{- end }}
+{{- if .Values.autoscaling.knowledge.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-knowledge-worker
+spec:
+  scaleTargetRef:
+    name: {{ include "agentic-platform.fullname" . }}-knowledge-worker
+  minReplicaCount: {{ .Values.autoscaling.knowledge.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.knowledge.maxReplicas }}
+  cooldownPeriod: 300
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ required "kafka.bootstrapServers is required for KEDA" .Values.kafka.bootstrapServers | quote }}
+        consumerGroup: knowledge-agent
+        topic: tasks.knowledge
+        lagThreshold: {{ .Values.autoscaling.knowledge.lagThreshold | quote }}
+        offsetResetPolicy: earliest
+{{- end }}

@@ -1,0 +1,140 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-keycloak-postgres
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: keycloak-postgres
+  ports: [{name: postgres, port: 5432, targetPort: postgres}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-keycloak-postgres
+spec:
+  serviceName: {{ include "agentic-platform.fullname" . }}-keycloak-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: keycloak-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: postgres
+          image: {{ .Values.keycloak.postgresImage | quote }}
+          ports: [{name: postgres, containerPort: 5432}]
+          env:
+            - {name: POSTGRES_DB, value: keycloak}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.existingSecret }}, key: database-username}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.existingSecret }}, key: database-password}}
+          readinessProbe:
+            exec: {command: [/bin/sh, -ec, 'pg_isready -U "$POSTGRES_USER" -d keycloak']}
+            initialDelaySeconds: 5
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.keycloak.storageClassName }}
+        storageClassName: {{ .Values.keycloak.storageClassName }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.keycloak.storage }}}}
+{{- if eq .Values.keycloak.mode "operator" }}
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-keycloak
+spec:
+  instances: {{ .Values.keycloak.replicas }}
+  image: {{ .Values.keycloak.image | quote }}
+  db:
+    vendor: postgres
+    host: {{ include "agentic-platform.fullname" . }}-keycloak-postgres
+    database: keycloak
+    usernameSecret: {name: {{ .Values.keycloak.existingSecret }}, key: database-username}
+    passwordSecret: {name: {{ .Values.keycloak.existingSecret }}, key: database-password}
+  bootstrapAdmin:
+    user: {secret: {{ .Values.keycloak.bootstrapAdminSecret }}}
+  http: {httpEnabled: true}
+  hostname: {strict: false, backchannelDynamic: true}
+  proxy: {headers: xforwarded}
+  ingress: {enabled: false}
+  unsupported:
+    podTemplate:
+      spec: {automountServiceAccountToken: false}
+{{- else }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-keycloak
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: keycloak
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-keycloak
+spec:
+  replicas: {{ .Values.keycloak.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agentic-platform.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: keycloak
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: keycloak
+          image: {{ .Values.keycloak.image | quote }}
+          args: [start, --http-enabled=true, --hostname-strict=false, --proxy-headers=xforwarded, --health-enabled=true]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: management, containerPort: 9000}
+          env:
+            - {name: KC_DB, value: postgres}
+            - {name: KC_DB_URL_HOST, value: {{ printf "%s-keycloak-postgres" (include "agentic-platform.fullname" .) | quote }}}
+            - {name: KC_DB_URL_DATABASE, value: keycloak}
+            - name: KC_DB_USERNAME
+              valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.existingSecret }}, key: database-username}}
+            - name: KC_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.existingSecret }}, key: database-password}}
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.bootstrapAdminSecret }}, key: username}}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.bootstrapAdminSecret }}, key: password}}
+          readinessProbe: {httpGet: {path: /health/ready, port: management}, initialDelaySeconds: 20}
+          livenessProbe: {httpGet: {path: /health/live, port: management}, initialDelaySeconds: 40}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+{{- end }}
+{{- end }}

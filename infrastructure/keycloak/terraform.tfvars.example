@@ -1,0 +1,7 @@
+public_keycloak_url = "https://platform.example.com"
+realm_name          = "agentic-platform"
+client_id           = "knowledge-graph-ui"
+valid_redirect_uris = ["https://platform.example.com/knowledge"]
+web_origins         = ["https://platform.example.com"]
+
+# Supply the administrator password through the corresponding TF_VAR environment variable.

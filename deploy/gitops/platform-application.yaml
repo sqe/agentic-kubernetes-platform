@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agentic-platform
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE_ORG/agentic-kubernetes-platform.git
+    targetRevision: main
+    path: deploy/helm/agentic-platform
+    helm:
+      valueFiles: [values.yaml, values-baremetal.yaml]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: agentic-platform
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true]

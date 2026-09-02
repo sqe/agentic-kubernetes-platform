@@ -1,0 +1,10 @@
+# Use Cilium ENI IPAM as the EKS CNI; do not install the vpc-cni or kube-proxy add-ons.
+ipam:
+  mode: eni
+eni:
+  enabled: true
+routingMode: native
+bpf:
+  masquerade: true
+endpointRoutes:
+  enabled: true

@@ -1,0 +1,1 @@
+"""Agent discovery registry service."""

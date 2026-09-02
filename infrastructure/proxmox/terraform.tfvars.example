@@ -1,0 +1,15 @@
+proxmox_endpoint   = "https://pve.example.com:8006/"
+proxmox_insecure   = false
+template_vm_id     = 9000
+template_node_name = "pve1"
+ipv4_gateway       = "192.168.20.1"
+ssh_public_key     = "ssh-ed25519 REPLACE_ME"
+
+nodes = {
+  platform-1 = { proxmox_node = "pve1", vm_id = 4101, ipv4_address = "192.168.20.61/24", gpu_mapping = "gpu-node-1", gpu_memory_class = "24gb" }
+  platform-2 = { proxmox_node = "pve2", vm_id = 4102, ipv4_address = "192.168.20.62/24" }
+  platform-3 = { proxmox_node = "pve3", vm_id = 4103, ipv4_address = "192.168.20.63/24" }
+}
+
+# Keep the token out of this file:
+# export TF_VAR_proxmox_api_token='terraform@pve!platform=REPLACE_ME'

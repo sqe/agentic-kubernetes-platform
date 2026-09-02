@@ -1,0 +1,28 @@
+kafka:
+  bootstrapServers: kafka-kafka-bootstrap.messaging.svc:9092
+autoscaling:
+  weather:
+    enabled: true
+  knowledge:
+    enabled: true
+monitoring:
+  serviceMonitor:
+    enabled: true
+postgresql:
+  enabled: true
+qdrant:
+  enabled: true
+keycloak:
+  enabled: true
+  mode: operator
+services:
+  knowledge-api:
+    extraEnv:
+      - {name: NEO4J_URI, value: "bolt://neo4j:7687"}
+      - {name: OBJECT_STORE_ENDPOINT, value: "http://rustfs.rustfs.svc:9000"}
+      - {name: OBJECT_STORE_BUCKET, value: agent-documents}
+      - {name: QDRANT_URL, value: "http://qdrant:6333"}
+      - name: QDRANT_API_KEY
+        valueFrom: {secretKeyRef: {name: platform-qdrant-secret, key: api-key}}
+      - name: NEO4J_PASSWORD
+        valueFrom: {secretKeyRef: {name: knowledge-secrets, key: neo4j-password}}

@@ -1,0 +1,111 @@
+{{- $root := . -}}
+{{- range $name, $config := .Values.services }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic-platform.fullname" $root }}-{{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "agentic-platform.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $config.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentic-platform.name" $root }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agentic-platform.name" $root }}
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        app.kubernetes.io/component: {{ $name }}
+      annotations:
+        checksum/config: {{ toJson $root.Values.kafka | sha256sum }}
+        {{- with $root.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentic-platform.serviceAccountName" $root }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: {{ $name }}
+          image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- with $config.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $config.port }}
+          env:
+            - {name: SERVICE, value: {{ $name | quote }}}
+            - {name: PORT, value: {{ $config.port | quote }}}
+            - {name: REGISTRY_URL, value: "http://{{ include "agentic-platform.fullname" $root }}-registry:8001"}
+            - {name: AGENT_ENDPOINT, value: "http://{{ include "agentic-platform.fullname" $root }}-weather:8100"}
+            - {name: KNOWLEDGE_AGENT_ENDPOINT, value: "http://{{ include "agentic-platform.fullname" $root }}-knowledge-api:8200"}
+            {{- if $root.Values.kafka.bootstrapServers }}
+            - {name: KAFKA_BOOTSTRAP_SERVERS, value: {{ $root.Values.kafka.bootstrapServers | quote }}}
+            - {name: KAFKA_SECURITY_PROTOCOL, value: {{ $root.Values.kafka.securityProtocol | quote }}}
+            {{- end }}
+            {{- if $root.Values.mlflow.trackingUri }}
+            - {name: MLFLOW_TRACKING_URI, value: {{ $root.Values.mlflow.trackingUri | quote }}}
+            {{- end }}
+            {{- with $config.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+          resources:
+            {{- toYaml $config.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (default $root.Values.nodeSelector $config.nodeSelector) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (default $root.Values.tolerations $config.tolerations) }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentic-platform.fullname" $root }}-{{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "agentic-platform.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  type: {{ default "ClusterIP" $config.serviceType }}
+  selector:
+    app.kubernetes.io/name: {{ include "agentic-platform.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $name }}
+  ports:
+    - name: http
+      port: {{ $config.port }}
+      targetPort: http
+{{- end }}

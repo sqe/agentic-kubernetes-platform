@@ -1,0 +1,15 @@
+[
+  {
+    "image": "jwst-mirror.jpg",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nIdentify the primary object and describe its engineering purpose."
+      },
+      {
+        "from": "gpt",
+        "value": "The image shows a segmented space-telescope primary mirror designed to collect and focus faint infrared light."
+      }
+    ]
+  }
+]

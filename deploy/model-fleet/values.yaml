@@ -1,0 +1,27 @@
+# Install from the independently versioned model-fleet-operator chart.
+fullnameOverride: model-fleet
+profile: microk8s
+
+slack:
+  enabled: true
+  existingSecret: model-fleet-control
+  agentSupervisor:
+    enabled: true
+    url: http://model-fleet-supervisor:8000
+  extraEnv:
+    - {name: DEFAULT_WORKLOAD_NAMESPACE, value: agentic-platform}
+    - {name: SLACK_ALLOWED_USER_IDS, value: "REPLACE_WITH_SLACK_USER_IDS"}
+    - {name: SLACK_ALLOWED_CHANNEL_IDS, value: "REPLACE_WITH_SLACK_CHANNEL_IDS"}
+
+kafka:
+  enabled: true
+  bootstrapServers: kafka-kafka-bootstrap.messaging.svc:9092
+
+controlPlane:
+  enabled: true
+  existingSecret: model-fleet-control
+  fleetAgentEnabled: true
+
+gateway:
+  enabled: true
+  gatewayClassName: cilium

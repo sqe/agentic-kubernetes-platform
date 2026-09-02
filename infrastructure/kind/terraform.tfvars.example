@@ -1,0 +1,5 @@
+cluster_name         = "agentic-platform"
+worker_count         = 1
+http_port            = 8080
+https_port           = 8443
+build_runtime_image  = true

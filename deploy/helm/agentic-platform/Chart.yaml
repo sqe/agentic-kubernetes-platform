@@ -1,0 +1,6 @@
+apiVersion: v2
+name: agentic-platform
+description: Registry, supervisor, and horizontally scalable specialist agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

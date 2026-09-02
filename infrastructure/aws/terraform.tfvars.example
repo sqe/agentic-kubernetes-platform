@@ -1,0 +1,10 @@
+name                 = "agentic-platform"
+region               = "us-west-2"
+availability_zones   = ["us-west-2a", "us-west-2b", "us-west-2c"]
+kubernetes_version   = "1.34"
+artifact_bucket_name = null
+gpu_instance_types   = ["g5.xlarge"]
+gpu_memory_class     = "24gb"
+auth_callback_urls   = ["https://platform.example.com/knowledge"]
+auth_logout_urls     = ["https://platform.example.com/knowledge"]
+cognito_domain_prefix = "REPLACE_WITH_GLOBALLY_UNIQUE_PREFIX"

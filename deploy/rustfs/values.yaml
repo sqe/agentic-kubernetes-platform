@@ -1,0 +1,11 @@
+replicaCount: 4
+mode:
+  standalone: {enabled: false}
+  distributed: {enabled: true}
+storageclass:
+  name: local-path
+persistence:
+  enabled: true
+  size: 500Gi
+ingress:
+  enabled: false

@@ -1,0 +1,17 @@
+{{- $root := . -}}
+{{- range $name, $config := .Values.services }}
+{{- if gt (int $config.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentic-platform.fullname" $root }}-{{ $name }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentic-platform.name" $root }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,23 @@
+kubeProxyReplacement: true
+gatewayAPI:
+  enabled: true
+envoy:
+  enabled: true
+operator:
+  replicas: 2
+hubble:
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+  metrics:
+    enableOpenMetrics: true
+    enabled:
+      - dns:query;ignoreAAAA
+      - drop
+      - tcp
+      - flow
+      - icmp
+      - httpV2:exemplars=true;labelsContext=source_namespace,source_workload,destination_namespace,destination_workload
+prometheus:
+  enabled: true
