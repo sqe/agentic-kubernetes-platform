@@ -2,7 +2,11 @@ image: {repository: agentic-platform-runtime, tag: dev, pullPolicy: IfNotPresent
 kafka: {bootstrapServers: "kafka.messaging.svc:9092", securityProtocol: PLAINTEXT}
 services:
   registry: {replicas: 1}
-  supervisor: {replicas: 1}
+  supervisor:
+    replicas: 1
+    extraEnv:
+      - {name: LLM_GATEWAY_URL, value: "http://host.docker.internal:8081"}
+      - {name: LLM_GATEWAY_MODEL, value: "mlx-community/Qwen3.8-27B-4bit"}
   weather: {replicas: 1}
   knowledge-api:
     replicas: 1

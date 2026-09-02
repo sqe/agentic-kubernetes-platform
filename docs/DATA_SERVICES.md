@@ -7,6 +7,8 @@ The platform profiles include two optional private data services:
   configuration, and audit references.
 - **Qdrant** stores embedding vectors and payload metadata for semantic search,
   retrieval, and hybrid graph/vector agent workflows.
+- **Cube Core** provides a governed semantic BI layer over selected PostgreSQL
+  tables; it is not a system of record.
 
 They complement rather than replace the existing stores. S3/RustFS remains the
 source of truth for documents, models, datasets, and exports. Neo4j owns explicit
@@ -21,6 +23,7 @@ flowchart LR
     Source --> Graph --> Neo4j[(Neo4j<br/>typed relationships)]
     API[Registry, supervisor, and knowledge API] --> PostgreSQL[(PostgreSQL<br/>profiles and workflow state)]
     API --> Redis[(Redis<br/>disposable hot cache)]
+    Analytics[Analytics agent] --> Cube[Cube semantic layer] --> PostgreSQL
     Qdrant --> Hybrid[Hybrid retrieval]
     Neo4j --> Hybrid
     Hybrid --> Citation[Answer with source URI, version, and evidence]
@@ -88,3 +91,7 @@ before switching traffic.
 Local Compose exposes both services on loopback only and uses explicitly
 development-only credentials. Kubernetes never includes credentials in chart
 values or rendered environment literals.
+
+The Kind Cube profile models agent messages and registrations from PostgreSQL.
+Cube Store contains disposable/pre-aggregated analytics state; source records
+remain in PostgreSQL. See [Cube analytics](CUBE_ANALYTICS.md).

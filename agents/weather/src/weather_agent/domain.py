@@ -6,7 +6,20 @@ from typing import Any
 import httpx
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+PHOTON_URL = "https://photon.komoot.io/api/"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+
+def clean_location(location: str) -> str:
+    location = re.split(
+        r"(?i)\s*,?\s+(?:and|also)\s+(?:give|show|include|tell)\b",
+        location,
+        maxsplit=1,
+    )[0]
+    location = re.sub(
+        r"(?i)\b(?:d?jalal)[-\s]?abat\b", "Manas Jalal-Abad", location
+    )
+    return location.strip(" ,?.!")
 
 
 def extract_location(prompt: str) -> str | None:
@@ -18,7 +31,7 @@ def extract_location(prompt: str) -> str | None:
     )
     for pattern in patterns:
         if match := re.search(pattern, prompt):
-            return match.group(1).strip()
+            return clean_location(match.group(1))
     return None
 
 
@@ -82,15 +95,49 @@ class OpenMeteoClient:
         }
 
     async def _geocode(self, location: str) -> dict[str, Any]:
+        location = clean_location(location)
         response = await self.client.get(
             GEOCODING_URL,
             params={"name": location, "count": 1, "language": "en", "format": "json"},
         )
         response.raise_for_status()
         results = response.json().get("results", [])
-        if not results:
+        if results:
+            return results[0]
+
+        response = await self.client.get(
+            PHOTON_URL,
+            params={"q": location, "limit": 5},
+            headers={"User-Agent": "agentic-kubernetes-platform/0.1"},
+        )
+        response.raise_for_status()
+        features = response.json().get("features", [])
+        if not features:
             raise ValueError(f"Location not found: {location}")
-        return results[0]
+        feature = next(
+            (
+                item
+                for item in features
+                if item.get("properties", {}).get("type") in {"city", "town", "village"}
+            ),
+            next(
+                (
+                    item
+                    for item in features
+                    if item.get("properties", {}).get("osm_key") == "place"
+                ),
+                features[0],
+            ),
+        )
+        properties = feature.get("properties", {})
+        longitude, latitude = feature["geometry"]["coordinates"]
+        return {
+            "name": properties.get("name") or properties.get("city") or location,
+            "country": properties.get("country"),
+            "admin1": properties.get("state"),
+            "latitude": latitude,
+            "longitude": longitude,
+        }
 
     async def close(self) -> None:
         if self._owns_client:

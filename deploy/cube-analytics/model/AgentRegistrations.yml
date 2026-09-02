@@ -1,0 +1,10 @@
+cubes:
+  - name: AgentRegistrations
+    sql_table: public.agent_registrations
+    description: Active specialist registrations observed by the platform registry.
+    measures:
+      - name: count
+        type: count
+    dimensions:
+      - {name: name, sql: name, type: string, primary_key: true}
+      - {name: observedAt, sql: observed_at, type: time}

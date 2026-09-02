@@ -35,7 +35,7 @@ spec:
         app.kubernetes.io/component: postgresql
     spec:
       automountServiceAccountToken: false
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: postgresql
           image: {{ .Values.postgresql.image | quote }}

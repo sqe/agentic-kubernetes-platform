@@ -38,6 +38,26 @@ Model Fleet's Qwen examples show GPU-fit declarations and the important limits
 of a 27B model on one 24 GiB card. A hosted provider also works when it exposes
 the same API contract and its key comes from a Secret.
 
+For local Apple Silicon development, run
+`mlx-community/Qwen3.8-27B-4bit` with Apple's `mlx_lm.server` on the macOS host.
+The kind profile reaches its OpenAI-compatible API through
+`http://host.docker.internal:8081`; see the [kind guide](../infrastructure/kind/README.md).
+The approximately 16.1 GB model fits comfortably in a 48 GB unified-memory Mac,
+but requires at least 20 GB of free disk for weights and download headroom.
+MLX remains a host development backend—not a Kubernetes workload or production
+API server.
+
+The current self-hosted example is
+[`qwen38-27b-gateway.yaml`](../deploy/model-fleet/qwen38-27b-gateway.yaml):
+Qwen3.8-27B AWQ-INT4 on vLLM 0.17.0, selected by the
+`values-model-fleet.yaml` profile. Its checkpoint is about 21.02 GB. On a 24
+GiB GPU the example therefore uses a 4K context, two sequences, FP8 KV cache,
+eager execution, and 6 GiB host-memory offload. This is a constrained
+experiment—not a plentiful fit. Prefer a 32/48 GiB GPU for production or a
+smaller official AWQ model when 24 GiB headroom matters. Hydrate the pinned
+revision from S3/RustFS for repeatable startup rather than repeatedly fetching
+mutable upstream files.
+
 Knowledge extraction and embeddings are configured separately with
 `OPENAI_BASE_URL`/`OPENAI_MODEL` and
 `EMBEDDING_BASE_URL`/`EMBEDDING_MODEL`. Separate clients prevent Qdrant or one

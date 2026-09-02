@@ -13,15 +13,16 @@ context="kind-$cluster_name"
 namespace=agentic-platform
 
 kubectl --context "$context" apply --server-side -f \
-  "https://github.com/kubernetes-sigs/gateway-api/releases/download/v${gateway_api_version}/standard-install.yaml"
+  "https://github.com/kubernetes-sigs/gateway-api/releases/download/v${gateway_api_version}/experimental-install.yaml"
 helm repo add cilium https://helm.cilium.io --force-update
 helm upgrade --install cilium cilium/cilium --kube-context "$context" -n kube-system \
-  --version "$cilium_version" -f "$repository_root/deploy/cilium/values-common.yaml" \
+  --version "$cilium_version" \
+  -f "$repository_root/deploy/cilium/values-common.yaml" \
+  -f "$repository_root/deploy/cilium/values-kind.yaml" \
   --set k8sServiceHost="${cluster_name}-control-plane" --set k8sServicePort=6443 \
-  --set gatewayAPI.hostNetwork.enabled=true \
-  --set envoy.securityContext.capabilities.keepCapNetBindService=true \
-  --set 'envoy.securityContext.capabilities.envoy[0]=NET_BIND_SERVICE' \
   --wait --timeout 10m
+kubectl --context "$context" -n kube-system rollout restart deployment/cilium-operator
+kubectl --context "$context" -n kube-system rollout status deployment/cilium-operator --timeout=5m
 
 helm repo add kedacore https://kedacore.github.io/charts --force-update
 helm upgrade --install keda kedacore/keda --kube-context "$context" -n keda \
@@ -77,7 +78,7 @@ spec:
     spec:
       containers:
         - name: rustfs
-          image: rustfs/rustfs:v1.0.0
+          image: rustfs/rustfs@sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21
           args: [/data]
           env:
             - {name: RUSTFS_ACCESS_KEY, value: local-access-key}
@@ -95,6 +96,7 @@ YAML
 kubectl --context "$context" -n "$namespace" create secret generic platform-runtime-secrets \
   --from-literal=POSTGRES_URL=postgresql://agents:local-password@postgresql:5432/agents \
   --from-literal=REDIS_URL=redis://default:local-password@redis:6379/0 \
+  --from-literal=AUTH_DISABLED=true \
   --dry-run=client -o yaml | kubectl --context "$context" apply -f -
 kubectl --context "$context" -n "$namespace" create secret generic platform-postgresql-secret \
   --from-literal=database=agents --from-literal=username=agents --from-literal=password=local-password \
@@ -126,5 +128,9 @@ kind load docker-image "$runtime_image" --name "$cluster_name"
 helm upgrade --install platform "$repository_root/deploy/helm/agentic-platform" \
   --kube-context "$context" -n "$namespace" \
   -f "$repository_root/deploy/helm/agentic-platform/values-kind.yaml" --wait --timeout 15m
+kubectl --context "$context" -n "$namespace" rollout restart deployment \
+  -l app.kubernetes.io/instance=platform
+kubectl --context "$context" -n "$namespace" rollout status deployment \
+  -l app.kubernetes.io/instance=platform --timeout=10m
 kubectl --context "$context" -n "$namespace" wait --for=condition=Programmed \
   gateway/agentic-platform --timeout=5m

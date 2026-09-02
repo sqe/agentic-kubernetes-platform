@@ -85,6 +85,23 @@ ID is not interchangeable with that identity. An installation can add a trusted
 identity-mapping service before registering graph skills; bypassing tenant
 identity is not an acceptable integration shortcut.
 
+## Cube analytics agent
+
+```mermaid
+flowchart LR
+    Supervisor -->|analytics.usage| Kafka[(tasks.analytics)]
+    Kafka --> Agent[Analytics specialist]
+    Agent -->|Tenant-scoped semantic query| Cube[Cube Core]
+    Cube --> PostgreSQL[(Conversation and registry tables)]
+    Agent --> Results[(results.analytics)]
+    Results --> Supervisor
+```
+
+This specialist exposes bounded BI skills, not arbitrary SQL. It returns rows
+and the exact Cube query while preserving the normal correlation, idempotency,
+caching, metrics, and persistence contracts. See
+[Cube analytics](CUBE_ANALYTICS.md).
+
 ## Adding a specialist
 
 Use [the implementation checklist](ADDING_AGENTS.md). A useful specialist has a

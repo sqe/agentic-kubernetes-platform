@@ -1,7 +1,13 @@
 import httpx
 import pytest
 from weather_agent.app import WeatherHandler, agent_card, create_app
-from weather_agent.domain import FORECAST_URL, GEOCODING_URL, OpenMeteoClient, extract_location
+from weather_agent.domain import (
+    FORECAST_URL,
+    GEOCODING_URL,
+    PHOTON_URL,
+    OpenMeteoClient,
+    extract_location,
+)
 
 from platform_runtime.cache import Cache
 
@@ -12,6 +18,11 @@ from platform_runtime.cache import Cache
         ("weather in New York?", "New York"),
         ("Forecast for Reykjavík", "Reykjavík"),
         ("Tokyo weather", "Tokyo"),
+        (
+            "what's the weather in djalalabat Kyrgyzstan, also give me forecast",
+            "Manas Jalal-Abad Kyrgyzstan",
+        ),
+        ("what's the weather in vancouwer wa", "vancouwer wa"),
         ("hello", None),
     ],
 )
@@ -82,14 +93,53 @@ async def test_forecast_and_missing_location():
         await missing.current("Nowhere")
 
 
+@pytest.mark.asyncio
+async def test_fuzzy_geocoding_fallback():
+    async def transport(request: httpx.Request):
+        if str(request.url).startswith(GEOCODING_URL):
+            return httpx.Response(200, json={})
+        if str(request.url).startswith(PHOTON_URL):
+            return httpx.Response(
+                200,
+                json={
+                    "features": [
+                        {
+                            "properties": {
+                                "name": "Vancouver",
+                                "state": "Washington",
+                                "country": "United States",
+                                "osm_key": "place",
+                            },
+                            "geometry": {"coordinates": [-122.67, 45.63]},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "timezone": "America/Los_Angeles",
+                "current": {"temperature_2m": 12},
+                "current_units": {"temperature_2m": "°C"},
+            },
+        )
+
+    client = OpenMeteoClient(httpx.AsyncClient(transport=httpx.MockTransport(transport)))
+    result = await client.current("vancouwer wa")
+    assert result["location"] == "Vancouver"
+    assert result["latitude"] == 45.63
+
+
 class FakeWeather:
     calls = 0
+    forecast_calls = 0
 
     async def current(self, location):
         self.calls += 1
         return {"location": location, "temperature": 20}
 
     async def forecast(self, location, days):
+        self.forecast_calls += 1
         return {"location": location, "days": days}
 
 
@@ -106,6 +156,15 @@ async def test_weather_handler_methods():
         }
     )
     assert result["result"]["location"] == "Lima"
+    combined = await handler(
+        {
+            "jsonrpc": "2.0",
+            "id": "combined",
+            "method": "weather.current",
+            "params": {"prompt": "weather in Lima, also give me forecast", "days": 4},
+        }
+    )
+    assert combined["result"]["forecast"]["days"] == 4
     forecast = await handler(
         {
             "jsonrpc": "2.0",

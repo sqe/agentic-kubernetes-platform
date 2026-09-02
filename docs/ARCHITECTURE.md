@@ -18,7 +18,7 @@
 ```mermaid
 flowchart TB
     subgraph Experience[Experience layer]
-        UI[Graph UI] --- Slack[Slack App Home] --- Clients[API and MCP clients]
+        UI[Conversation and graph UIs] --- Slack[Slack App Home] --- Clients[API and MCP clients]
     end
     subgraph Edge[Edge and identity]
         Gateway[Cilium Gateway API and Envoy] --- IdP[Cognito or Keycloak]
@@ -28,10 +28,13 @@ flowchart TB
     end
     subgraph Runtime[Messaging and specialists]
         Kafka[(Kafka JSON-RPC)] --> Agents[Weather, graph, and custom agents]
+        Kafka --> Analytics[Cube analytics specialist]
         Redis[(Redis cache)]
     end
     subgraph Data[Models and durable data]
         Models[vLLM and training] --- Stores[(PostgreSQL, Qdrant, Neo4j, S3 or RustFS)]
+        Analytics --> Cube[Operator-managed Cube Core]
+        Cube --> Stores
     end
     subgraph Capacity[Capacity]
         Compute[EKS or Proxmox/K3s NVIDIA nodes] --- Scaling[KEDA and node scaling]
@@ -47,6 +50,15 @@ exact JSON-RPC method. See [Model Fleet integration](MODEL_FLEET_INTEGRATION.md)
 The native route can use a fixed OpenAI-compatible BYOM endpoint, but validates
 its choice against the registry before Kafka dispatch. See
 [Bring your own model or agent](BRING_YOUR_OWN.md).
+
+The conversation dashboard persists prompts before dispatch, correlates
+`results.*` messages by JSON-RPC ID, and exposes revocable read-only links. See
+[conversation dashboard](DASHBOARD.md).
+
+Cube analytics uses the same task/result contract. The specialist applies the
+authenticated tenant filter and sends bounded semantic queries to Cube Core;
+the Cube operator reconciles its API, refresh worker, and Cube Store. See
+[Cube operator and agent-to-agent BI](CUBE_ANALYTICS.md).
 
 ## Request and result path
 

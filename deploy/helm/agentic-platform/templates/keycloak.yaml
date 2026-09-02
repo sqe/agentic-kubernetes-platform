@@ -30,13 +30,14 @@ spec:
         app.kubernetes.io/component: keycloak-postgres
     spec:
       automountServiceAccountToken: false
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: postgres
           image: {{ .Values.keycloak.postgresImage | quote }}
           ports: [{name: postgres, containerPort: 5432}]
           env:
             - {name: POSTGRES_DB, value: keycloak}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
             - name: POSTGRES_USER
               valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.existingSecret }}, key: database-username}}
             - name: POSTGRES_PASSWORD
@@ -63,6 +64,7 @@ metadata:
 spec:
   instances: {{ .Values.keycloak.replicas }}
   image: {{ .Values.keycloak.image | quote }}
+  startOptimized: false
   db:
     vendor: postgres
     host: {{ include "agentic-platform.fullname" . }}-keycloak-postgres
@@ -72,12 +74,9 @@ spec:
   bootstrapAdmin:
     user: {secret: {{ .Values.keycloak.bootstrapAdminSecret }}}
   http: {httpEnabled: true}
-  hostname: {strict: false, backchannelDynamic: true}
+  hostname: {strict: false, backchannelDynamic: false}
   proxy: {headers: xforwarded}
   ingress: {enabled: false}
-  unsupported:
-    podTemplate:
-      spec: {automountServiceAccountToken: false}
 {{- else }}
 ---
 apiVersion: v1

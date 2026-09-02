@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     knowledge_max_chunks: int = 40
     redis_url: str | None = None
     cache_ttl_seconds: int = 300
+    cube_url: str = "http://agentic-analytics-api:4000"
+    cube_api_secret: str | None = None
 
 
 settings = Settings()

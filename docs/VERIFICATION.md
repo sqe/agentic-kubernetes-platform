@@ -4,6 +4,20 @@ The repository separates source-level proof from deployment proof. A passing
 unit test or rendered manifest is evidence of its stated scope, not evidence of
 a production deployment, GPU throughput, availability, or cost reduction.
 
+```mermaid
+flowchart LR
+    Source[Source revision] --> Static[Lint and configuration validation]
+    Static --> Tests[Unit and integration tests]
+    Tests --> Render[Helm and Terraform validation]
+    Render --> Build[Container build and scan]
+    Build --> Deploy[Non-sensitive test deployment]
+    Deploy --> Runtime[Runtime checks and traces]
+    Runtime --> Evidence[Redacted evidence with UTC timestamp]
+    Evidence --> Claim{Claim scope}
+    Claim -->|Source behavior| PublishSource[Publish source-level result]
+    Claim -->|Scale, cost, or performance| Measurements[Require measured methodology]
+```
+
 ## Reproducible local checks
 
 ```bash
@@ -46,6 +60,9 @@ IDs, private hostnames, user data, and document content.
    same request window.
 8. Cognito or Keycloak signup, login, logout, and an API request rejected
    without a token.
+9. `scripts/verify-cube-analytics.sh` showing a Ready `CubeCluster` and a
+   completed tenant-scoped `analytics.usage` result through Cilium, Kafka, Cube
+   Core, and PostgreSQL; retain its query payload as evidence.
 
 Screenshots support machine-readable status; they do not replace it. If a step
 was not run, publish it as “not deployment-verified” rather than expected

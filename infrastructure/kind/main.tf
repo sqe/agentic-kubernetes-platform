@@ -2,6 +2,13 @@ locals {
   repository_root = abspath("${path.module}/../..")
   config_path     = "${path.module}/.generated-${var.cluster_name}.yaml"
   kube_context    = "kind-${var.cluster_name}"
+  chart_files     = sort(tolist(fileset("${path.module}/../../deploy/helm/agentic-platform", "**")))
+  chart_hash      = sha256(join("", [for file in local.chart_files : filesha256("${local.repository_root}/deploy/helm/agentic-platform/${file}")]))
+  runtime_hash = sha256(join("", concat(
+    [for file in sort(tolist(fileset("${path.module}/../../src", "**"))) : filesha256("${local.repository_root}/src/${file}") if !strcontains(file, "__pycache__")],
+    [for file in sort(tolist(fileset("${path.module}/../../agents", "**"))) : filesha256("${local.repository_root}/agents/${file}") if !strcontains(file, "__pycache__")],
+    [for file in sort(tolist(fileset("${path.module}/../../services", "**"))) : filesha256("${local.repository_root}/services/${file}") if !strcontains(file, "__pycache__")],
+  )))
 }
 
 resource "local_file" "kind_config" {
@@ -42,7 +49,10 @@ resource "terraform_data" "platform" {
     var.keycloak_operator_version,
     var.runtime_image,
     var.build_runtime_image,
-    filesha256("${local.repository_root}/deploy/helm/agentic-platform/Chart.yaml"),
+    local.chart_hash,
+    local.runtime_hash,
+    filesha256("${path.module}/scripts/bootstrap.sh"),
+    filesha256("${local.repository_root}/deploy/cilium/values-kind.yaml"),
     filesha256("${local.repository_root}/images/runtime/Dockerfile"),
   ]
 

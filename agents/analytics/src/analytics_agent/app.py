@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
@@ -21,81 +20,92 @@ from platform_runtime.kafka import KafkaWorker
 from platform_runtime.observability import observe_task, trace_execution
 from platform_runtime.settings import settings
 
-from .domain import OpenMeteoClient, extract_location
+from .cube import CubeClient
 
 logger = logging.getLogger(__name__)
 
 
 def agent_card() -> AgentCard:
     return AgentCard(
-        name="weather",
-        description="Current conditions and forecasts from Open-Meteo",
+        name="analytics",
+        description="Governed BI over agent usage and conversation outcomes through Cube Core",
         endpoint=settings.agent_endpoint,
-        task_topic="tasks.weather",
-        result_topic="results.weather",
+        task_topic="tasks.analytics",
+        result_topic="results.analytics",
         skills=[
-            Skill(id="weather.current", description="Current weather for a location"),
-            Skill(id="weather.forecast", description="One-to-sixteen-day location forecast"),
+            Skill(
+                id="analytics.usage",
+                description="Agent task volume grouped by skill and status",
+            ),
+            Skill(id="analytics.errors", description="Failed agent task volume grouped by skill"),
         ],
     )
 
 
-class WeatherHandler:
-    def __init__(self, weather: OpenMeteoClient, cache: Cache) -> None:
-        self.weather = weather
+class AnalyticsHandler:
+    def __init__(self, cube: CubeClient, cache: Cache) -> None:
+        self.cube = cube
         self.cache = cache
 
     async def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = normalize_task_request(payload)
-        params = request.params
-        location = params.get("location") or extract_location(params.get("prompt", ""))
-        if not location:
+        if request.method not in {"analytics.usage", "analytics.errors"}:
             return JsonRpcResponse(
-                id=request.id,
-                error=JsonRpcError(code=-32602, message="params.location is required"),
+                id=request.id, error=JsonRpcError(code=-32601, message="Method not found")
             ).model_dump(mode="json", exclude_none=True)
+        days = min(max(int(request.params.get("days", 30)), 1), 365)
+        tenant = request.params.get("tenant")
+        cache_parts = [request.method, str(days), str(tenant or "all")]
         try:
-            with observe_task("weather") as observed:
-                prompt = str(params.get("prompt", ""))
-                combined = "forecast" in prompt.casefold() and bool(
-                    re.search(r"(?i)\b(?:weather|current|now)\b", prompt)
-                )
-                cache_parts = [
-                    request.method,
-                    "combined" if combined else "single",
-                    str(location),
-                    str(params.get("days", 7)),
-                ]
-                if cached := await self.cache.get("weather", cache_parts):
+            with observe_task("analytics") as observed:
+                if cached := await self.cache.get("analytics", cache_parts):
                     observed["status"] = "success"
                     return JsonRpcResponse(id=request.id, result=cached).model_dump(
                         mode="json", exclude_none=True
                     )
-                if combined and request.method in {"weather.current", "weather.forecast"}:
-                    current, forecast = await asyncio.gather(
-                        self.weather.current(location),
-                        self.weather.forecast(location, int(params.get("days", 7))),
+                filters: list[dict[str, Any]] = []
+                if tenant:
+                    filters.append(
+                        {"member": "AgentMessages.owner", "operator": "equals", "values": [tenant]}
                     )
-                    result = {"current": current, "forecast": forecast}
-                elif request.method == "weather.current":
-                    result = await self.weather.current(location)
-                elif request.method == "weather.forecast":
-                    result = await self.weather.forecast(location, int(params.get("days", 7)))
-                else:
-                    return JsonRpcResponse(
-                        id=request.id,
-                        error=JsonRpcError(code=-32601, message="Method not found"),
-                    ).model_dump(mode="json", exclude_none=True)
+                if request.method == "analytics.errors":
+                    filters.append(
+                        {
+                            "member": "AgentMessages.status",
+                            "operator": "equals",
+                            "values": ["error"],
+                        }
+                    )
+                query = {
+                    "measures": ["AgentMessages.count"],
+                    "dimensions": ["AgentMessages.skill", "AgentMessages.status"],
+                    "timeDimensions": [
+                        {
+                            "dimension": "AgentMessages.createdAt",
+                            "dateRange": f"Last {days} days",
+                        }
+                    ],
+                    "filters": filters,
+                    "order": {"AgentMessages.count": "desc"},
+                    "limit": 100,
+                }
+                response = await self.cube.query(query)
+                result = {
+                    "window_days": days,
+                    "tenant_scoped": bool(tenant),
+                    "rows": response.get("data", []),
+                    "last_refresh_time": response.get("lastRefreshTime"),
+                    "query": query,
+                }
                 observed["status"] = "success"
-                await self.cache.set("weather", cache_parts, result)
-            trace_execution("weather", request.id, result, settings.mlflow_tracking_uri)
+                await self.cache.set("analytics", cache_parts, result)
+            trace_execution("analytics", request.id, result, settings.mlflow_tracking_uri)
             return JsonRpcResponse(id=request.id, result=result).model_dump(
                 mode="json", exclude_none=True
             )
         except (httpx.HTTPError, ValueError) as exc:
             return JsonRpcResponse(
-                id=request.id,
-                error=JsonRpcError(code=-32001, message=str(exc)),
+                id=request.id, error=JsonRpcError(code=-32002, message=str(exc))
             ).model_dump(mode="json", exclude_none=True)
 
 
@@ -111,25 +121,25 @@ async def register_forever(client: httpx.AsyncClient, card: AgentCard) -> None:
         await asyncio.sleep(settings.registration_interval_seconds)
 
 
-def create_app(weather: OpenMeteoClient | None = None, register: bool = True) -> FastAPI:
-    client = weather or OpenMeteoClient()
+def create_app(cube: CubeClient | None = None, register: bool = True) -> FastAPI:
+    client = cube or CubeClient(settings.cube_url, settings.cube_api_secret)
     cache = Cache(settings.redis_url, settings.cache_ttl_seconds)
-    handler = WeatherHandler(client, cache)
+    handler = AnalyticsHandler(client, cache)
     card = agent_card()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if not settings.kafka_bootstrap_servers:
-            raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS is required for the weather agent")
-        tasks: list[asyncio.Task[Any]] = []
+            raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS is required for the analytics agent")
         registration_client = httpx.AsyncClient(timeout=5)
+        tasks: list[asyncio.Task[Any]] = []
         if register:
             tasks.append(asyncio.create_task(register_forever(registration_client, card)))
         worker = KafkaWorker(
             settings.kafka_bootstrap_servers,
             card.task_topic,
             card.result_topic,
-            "weather-agent",
+            "analytics-agent",
             handler,
             settings.kafka_security_protocol,
         )
@@ -144,7 +154,7 @@ def create_app(weather: OpenMeteoClient | None = None, register: bool = True) ->
         await cache.close()
         await client.close()
 
-    app = FastAPI(title="Weather Agent", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Cube Analytics Agent", version="0.1.0", lifespan=lifespan)
 
     @app.get("/.well-known/agent.json", response_model=AgentCard)
     async def discovery() -> AgentCard:

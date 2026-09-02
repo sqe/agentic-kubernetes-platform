@@ -46,7 +46,14 @@ spec:
   {{- end }}
   rules:
     - matches:
+        - path: {type: PathPrefix, value: /dashboard}
+        - path: {type: PathPrefix, value: /share}
         - path: {type: PathPrefix, value: /v1/tasks}
+        - path: {type: PathPrefix, value: /v1/route}
+        - path: {type: PathPrefix, value: /v1/threads}
+        - path: {type: PathPrefix, value: /v1/shared}
+        - path: {type: PathPrefix, value: /v1/dashboard}
+        - path: {type: PathPrefix, value: /v1/skills}
       backendRefs:
         - name: {{ include "agentic-platform.fullname" . }}-supervisor
           port: {{ .Values.services.supervisor.port }}

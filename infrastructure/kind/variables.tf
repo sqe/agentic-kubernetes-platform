@@ -34,7 +34,7 @@ variable "cilium_version" {
 
 variable "gateway_api_version" {
   type    = string
-  default = "1.4.1"
+  default = "1.5.1"
 }
 
 variable "keda_version" {

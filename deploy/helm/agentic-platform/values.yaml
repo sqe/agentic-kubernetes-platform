@@ -4,6 +4,12 @@ serviceAccount: {create: true, name: "", annotations: {}}
 kafka: {bootstrapServers: "", securityProtocol: PLAINTEXT}
 mlflow: {trackingUri: ""}
 services:
+  analytics:
+    replicas: 0
+    port: 8300
+    agentEndpoint: "http://platform-agentic-platform-analytics:8300"
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}]
+    resources: {requests: {cpu: 50m, memory: 96Mi}, limits: {cpu: 500m, memory: 256Mi}}
   registry:
     replicas: 1
     port: 8001
