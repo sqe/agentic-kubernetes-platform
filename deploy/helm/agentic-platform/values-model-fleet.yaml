@@ -1,2 +1,7 @@
 modelFleetIntegration:
   enabled: true
+services:
+  supervisor:
+    extraEnv:
+      - {name: LLM_GATEWAY_URL, value: "http://qwen38-27b-router.models.svc:80"}
+      - {name: LLM_GATEWAY_MODEL, value: qwen38-router}

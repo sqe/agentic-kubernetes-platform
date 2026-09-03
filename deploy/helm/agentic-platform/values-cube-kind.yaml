@@ -1,0 +1,7 @@
+services:
+  analytics:
+    replicas: 1
+    extraEnv:
+      - {name: CUBE_URL, value: "http://agentic-analytics-api:4000"}
+      - name: CUBE_API_SECRET
+        valueFrom: {secretKeyRef: {name: cube-configuration, key: CUBEJS_API_SECRET}}

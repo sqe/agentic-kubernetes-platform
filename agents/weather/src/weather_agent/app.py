@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
@@ -55,13 +56,28 @@ class WeatherHandler:
             ).model_dump(mode="json", exclude_none=True)
         try:
             with observe_task("weather") as observed:
-                cache_parts = [request.method, str(location), str(params.get("days", 7))]
+                prompt = str(params.get("prompt", ""))
+                combined = "forecast" in prompt.casefold() and bool(
+                    re.search(r"(?i)\b(?:weather|current|now)\b", prompt)
+                )
+                cache_parts = [
+                    request.method,
+                    "combined" if combined else "single",
+                    str(location),
+                    str(params.get("days", 7)),
+                ]
                 if cached := await self.cache.get("weather", cache_parts):
                     observed["status"] = "success"
                     return JsonRpcResponse(id=request.id, result=cached).model_dump(
                         mode="json", exclude_none=True
                     )
-                if request.method == "weather.current":
+                if combined and request.method in {"weather.current", "weather.forecast"}:
+                    current, forecast = await asyncio.gather(
+                        self.weather.current(location),
+                        self.weather.forecast(location, int(params.get("days", 7))),
+                    )
+                    result = {"current": current, "forecast": forecast}
+                elif request.method == "weather.current":
                     result = await self.weather.current(location)
                 elif request.method == "weather.forecast":
                     result = await self.weather.forecast(location, int(params.get("days", 7)))

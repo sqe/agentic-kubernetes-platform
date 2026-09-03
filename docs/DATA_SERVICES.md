@@ -7,10 +7,18 @@ The platform profiles include two optional private data services:
   configuration, and audit references.
 - **Qdrant** stores embedding vectors and payload metadata for semantic search,
   retrieval, and hybrid graph/vector agent workflows.
+- **Cube Core** provides a governed semantic BI layer over selected PostgreSQL
+  tables; it is not a system of record.
 
 They complement rather than replace the existing stores. S3/RustFS remains the
 source of truth for documents, models, datasets, and exports. Neo4j owns explicit
 entities and relationships. Redis owns disposable hot cache entries.
+
+Knowledge ingestion stores the immutable original plus extracted text, graph
+JSON, cropped embedded pictures with PDF bounding-box provenance, and Qwen3-VL
+captions in S3/RustFS. Preview APIs
+stream these protected artifacts with the caller's tenant authorization;
+Neo4j/Qdrant references never replace the durable object or its provenance.
 
 ```mermaid
 flowchart LR
@@ -21,6 +29,7 @@ flowchart LR
     Source --> Graph --> Neo4j[(Neo4j<br/>typed relationships)]
     API[Registry, supervisor, and knowledge API] --> PostgreSQL[(PostgreSQL<br/>profiles and workflow state)]
     API --> Redis[(Redis<br/>disposable hot cache)]
+    Analytics[Analytics agent] --> Cube[Cube semantic layer] --> PostgreSQL
     Qdrant --> Hybrid[Hybrid retrieval]
     Neo4j --> Hybrid
     Hybrid --> Citation[Answer with source URI, version, and evidence]
@@ -38,6 +47,11 @@ corresponding entities in Neo4j, and cite the original S3/RustFS object. Keep th
 object URI, version, checksum, tenant, ontology, and embedding-model version in
 the vector payload so an index can be rebuilt rather than becoming the only copy
 of source data.
+
+Kind selects the dependency-free `local-hash-v1` lexical embedding so every new
+document produces Qdrant chunks without another model download. Set
+`EMBEDDING_BASE_URL` and `EMBEDDING_MODEL` to an OpenAI-compatible embedding model
+for production semantic retrieval; re-ingest existing documents after enabling it.
 
 ## Helm configuration
 
@@ -88,3 +102,7 @@ before switching traffic.
 Local Compose exposes both services on loopback only and uses explicitly
 development-only credentials. Kubernetes never includes credentials in chart
 values or rendered environment literals.
+
+The Kind Cube profile models agent messages and registrations from PostgreSQL.
+Cube Store contains disposable/pre-aggregated analytics state; source records
+remain in PostgreSQL. See [Cube analytics](CUBE_ANALYTICS.md).

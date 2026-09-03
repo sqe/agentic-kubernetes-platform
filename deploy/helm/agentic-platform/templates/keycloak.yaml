@@ -30,13 +30,14 @@ spec:
         app.kubernetes.io/component: keycloak-postgres
     spec:
       automountServiceAccountToken: false
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: postgres
           image: {{ .Values.keycloak.postgresImage | quote }}
           ports: [{name: postgres, containerPort: 5432}]
           env:
             - {name: POSTGRES_DB, value: keycloak}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
             - name: POSTGRES_USER
               valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.existingSecret }}, key: database-username}}
             - name: POSTGRES_PASSWORD
@@ -63,6 +64,7 @@ metadata:
 spec:
   instances: {{ .Values.keycloak.replicas }}
   image: {{ .Values.keycloak.image | quote }}
+  startOptimized: false
   db:
     vendor: postgres
     host: {{ include "agentic-platform.fullname" . }}-keycloak-postgres
@@ -72,12 +74,48 @@ spec:
   bootstrapAdmin:
     user: {secret: {{ .Values.keycloak.bootstrapAdminSecret }}}
   http: {httpEnabled: true}
-  hostname: {strict: false, backchannelDynamic: true}
+  hostname:
+    strict: false
+    backchannelDynamic: false
+    {{- if .Values.keycloak.realmImport.publicUrl }}
+    hostname: {{ .Values.keycloak.realmImport.publicUrl | quote }}
+    {{- end }}
   proxy: {headers: xforwarded}
   ingress: {enabled: false}
-  unsupported:
-    podTemplate:
-      spec: {automountServiceAccountToken: false}
+{{- if .Values.keycloak.realmImport.enabled }}
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: {{ include "agentic-platform.fullname" . }}-realm
+spec:
+  keycloakCRName: {{ include "agentic-platform.fullname" . }}-keycloak
+  realm:
+    realm: {{ .Values.keycloak.realmImport.realm | quote }}
+    displayName: Agentic Kubernetes Platform
+    enabled: true
+    registrationAllowed: true
+    registrationEmailAsUsername: true
+    loginWithEmailAllowed: true
+    resetPasswordAllowed: true
+    verifyEmail: false
+    sslRequired: external
+    passwordPolicy: length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername
+    clients:
+      - clientId: {{ .Values.keycloak.realmImport.clientId | quote }}
+        name: Knowledge Graph UI
+        enabled: true
+        publicClient: true
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: false
+        redirectUris: [{{ printf "%s/knowledge/" (trimSuffix "/" .Values.keycloak.realmImport.publicUrl) | quote }}]
+        webOrigins: [{{ trimSuffix "/" .Values.keycloak.realmImport.publicUrl | quote }}]
+        attributes: {pkce.code.challenge.method: S256}
+    roles:
+      realm:
+        - {name: graph-reader, description: Search and traverse knowledge graphs}
+        - {name: graph-ingestor, description: Upload documents and queue graph extraction}
+{{- end }}
 {{- else }}
 ---
 apiVersion: v1

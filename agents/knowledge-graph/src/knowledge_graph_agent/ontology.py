@@ -45,22 +45,46 @@ class Ontology(BaseModel):
                 name=item.name,
                 type=item.type if item.type in entity_types else "concept",
                 description=item.description,
+                aliases=item.aliases,
             )
             for item in graph.entities
         ]
-        types_by_name = {item.name.casefold(): item.type for item in entities}
+        entities_by_term = {
+            term.casefold(): item for item in entities for term in [item.name, *item.aliases]
+        }
         relationships: list[Relationship] = []
+        seen: set[tuple[str, str, str]] = set()
         for edge in graph.relationships:
             definition = relationship_types.get(edge.type)
-            source_type = types_by_name.get(edge.source.casefold())
-            target_type = types_by_name.get(edge.target.casefold())
-            if not definition or not source_type or not target_type:
+            source = entities_by_term.get(edge.source.casefold())
+            target = entities_by_term.get(edge.target.casefold())
+            if not source or not target or source.name == target.name:
                 continue
-            if definition.source_types and source_type not in definition.source_types:
-                continue
-            if definition.target_types and target_type not in definition.target_types:
-                continue
-            relationships.append(edge)
+            valid = definition is not None
+            if (
+                definition
+                and definition.source_types
+                and source.type not in definition.source_types
+            ):
+                valid = False
+            if (
+                definition
+                and definition.target_types
+                and target.type not in definition.target_types
+            ):
+                valid = False
+            edge_type = edge.type if valid else "related_to"
+            key = (source.name.casefold(), target.name.casefold(), edge_type)
+            if key not in seen:
+                relationships.append(
+                    Relationship(
+                        source=source.name,
+                        target=target.name,
+                        type=edge_type,
+                        evidence=edge.evidence,
+                    )
+                )
+                seen.add(key)
         return ExtractedGraph(entities=entities, relationships=relationships)
 
 

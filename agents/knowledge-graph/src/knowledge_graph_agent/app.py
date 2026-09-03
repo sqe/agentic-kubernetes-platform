@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import logging
 from contextlib import asynccontextmanager, suppress
@@ -8,8 +9,8 @@ from uuid import uuid4
 
 import httpx
 from aiokafka import AIOKafkaProducer
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
@@ -27,6 +28,7 @@ from .vector import VectorStore
 
 Claims = Annotated[dict[str, Any], Depends(verify_jwt)]
 logger = logging.getLogger(__name__)
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 def require_ontology(ontology_id: str) -> Ontology:
@@ -53,6 +55,7 @@ def agent_card() -> AgentCard:
             Skill(id="graph.path", description="Find the shortest path between entities"),
             Skill(id="graph.ontology", description="Retrieve a versioned graph ontology"),
             Skill(id="vector.search", description="Semantic search over document chunks"),
+            Skill(id="knowledge.fused-search", description="Search graph and vectors together"),
         ],
     )
 
@@ -153,7 +156,22 @@ def create_app(
             method="knowledge.ingest",
             params={"tenant": tenant, "document": document.model_dump(mode="json")},
         )
-        await producer.send_and_wait("tasks.knowledge", request.model_dump(mode="json"))
+        await store.queue_document(
+            tenant,
+            document.document_id,
+            document.title,
+            document.ontology,
+            document.source_uri,
+            request.id,
+        )
+        try:
+            await producer.send_and_wait("tasks.knowledge", request.model_dump(mode="json"))
+        except Exception:
+            await store.set_document_status(
+                tenant, document.document_id, "failed", "Unable to queue ingestion"
+            )
+            raise
+        await cache.invalidate(f"knowledge:{tenant}")
         return {"task_id": request.id, "status": "accepted"}
 
     @app.post("/v1/knowledge/documents", status_code=202)
@@ -167,17 +185,22 @@ def create_app(
         file: Annotated[UploadFile, File()],
         ontology: Annotated[str, Form()] = "core",
     ) -> dict[str, str]:
+        if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Documents must be 50 MiB or smaller")
         if file.content_type not in {"application/pdf", "text/plain", "application/json"}:
             raise HTTPException(status_code=415, detail="Only PDF, text, and JSON are supported")
         selected_ontology = require_ontology(ontology)
         document_id = str(uuid4())
-        uri = await object_store.upload(
-            claims["sub"],
-            document_id,
-            file.filename or "document",
-            file.file,
-            file.content_type,
-        )
+        try:
+            uri = await object_store.upload(
+                claims["sub"],
+                document_id,
+                file.filename or "document",
+                file.file,
+                file.content_type,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return await queue(
             DocumentIngest(
                 document_id=document_id,
@@ -191,6 +214,165 @@ def create_app(
     @app.get("/v1/knowledge/ontologies")
     async def ontologies(_: Claims) -> dict[str, Any]:
         return {"ontologies": [item.model_dump(mode="json") for item in ONTOLOGIES.values()]}
+
+    @app.get("/v1/knowledge/documents")
+    async def documents(claims: Claims, ontology: str | None = None) -> dict[str, Any]:
+        if ontology:
+            require_ontology(ontology)
+        namespace = f"knowledge:{claims['sub']}"
+        parts = ["documents", ontology or "all"]
+        if cached := await cache.get(namespace, parts):
+            return cached
+        result = {"documents": await store.documents(claims["sub"], ontology)}
+        await cache.set(namespace, parts, result)
+        return result
+
+    @app.get("/v1/knowledge/progress/{task_id}")
+    async def progress_stream(task_id: str, _: Claims) -> StreamingResponse:
+        """Stream ingestion progress as Server-Sent Events."""
+        from redis.asyncio import Redis as _Redis
+
+        redis = (
+            _Redis.from_url(settings.redis_url, decode_responses=True)
+            if settings.redis_url
+            else None
+        )
+        if not redis:
+            raise HTTPException(status_code=503, detail="Redis required for progress streaming")
+
+        async def event_stream():
+            key = f"progress:{task_id}"
+            try:
+                # Send a heartbeat immediately so the browser opens the stream.
+                ready = {
+                    "phase": "connecting",
+                    "current": "Connecting...",
+                    "latest_event": "",
+                    "pages_total": 0,
+                    "pages_done": 0,
+                    "chunks_total": 0,
+                    "chunks_done": 0,
+                    "entities": 0,
+                    "relationships": 0,
+                }
+                yield f"event: ready\ndata: {json.dumps(ready)}\n\n"
+                last = ""
+                for _ in range(600):  # 5-minute cap (poll every 0.5s)
+                    data = await redis.get(key)
+                    if data and data != last:
+                        last = data
+                        yield f"event: progress\ndata: {data}\n\n"
+                        parsed = json.loads(data)
+                        if parsed.get("phase") in ("complete", "error"):
+                            break
+                    await asyncio.sleep(0.5)
+                # Final flush.
+                data = await redis.get(key)
+                if data and data != last:
+                    yield f"event: progress\ndata: {data}\n\n"
+            finally:
+                await redis.aclose()
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    async def document_or_404(tenant: str, document_id: str) -> dict[str, Any]:
+        document = await store.document(tenant, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return document
+
+    @app.get("/v1/knowledge/documents/{document_id}/preview")
+    async def preview_document(document_id: str, claims: Claims) -> StreamingResponse:
+        document = await document_or_404(claims["sub"], document_id)
+        content, content_type = await object_store.download(document["source_uri"])
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type=content_type,
+            headers={"Content-Disposition": f'inline; filename="{document["title"]}"'},
+        )
+
+    @app.get("/v1/knowledge/documents/{document_id}/extracted")
+    async def extracted_document(document_id: str, claims: Claims) -> dict[str, Any]:
+        document = await document_or_404(claims["sub"], document_id)
+        extracted_uri = document.get("extracted_uri")
+        text_uri = document.get("text_uri")
+        if not extracted_uri and not text_uri:
+            raise HTTPException(status_code=404, detail="No extracted data available")
+        result: dict[str, Any] = {}
+        if extracted_uri:
+            content, _ = await object_store.download(extracted_uri)
+            result["graph"] = json.loads(content)
+        if text_uri:
+            content, _ = await object_store.download(text_uri)
+            result["text"] = content.decode(errors="replace")
+        return result
+
+    @app.get("/v1/knowledge/documents/{document_id}/visuals")
+    async def document_visuals(document_id: str, claims: Claims) -> dict[str, Any]:
+        await document_or_404(claims["sub"], document_id)
+        visuals = await store.visuals(claims["sub"], document_id)
+        return {
+            "visuals": [
+                {
+                    "page": visual["page"],
+                    "caption": visual["caption"],
+                    "image_url": (
+                        f"/v1/knowledge/documents/{document_id}/visuals/{visual['page']}/image"
+                    ),
+                }
+                for visual in visuals
+            ]
+        }
+
+    @app.get("/v1/knowledge/documents/{document_id}/visuals/{page}/image")
+    async def preview_visual(document_id: str, page: int, claims: Claims) -> StreamingResponse:
+        await document_or_404(claims["sub"], document_id)
+        visual = next(
+            (
+                item
+                for item in await store.visuals(claims["sub"], document_id)
+                if item["page"] == page
+            ),
+            None,
+        )
+        if not visual:
+            raise HTTPException(status_code=404, detail="Visual not found")
+        content, content_type = await object_store.download(visual["image_uri"])
+        return StreamingResponse(io.BytesIO(content), media_type=content_type)
+
+    @app.get("/v1/knowledge/entity/{name}/visuals")
+    async def entity_visuals(
+        name: str, claims: Claims, ontology: str | None = None
+    ) -> dict[str, Any]:
+        selected_ontology = ontology or "core"
+        visuals = await store.visuals_for_entity(claims["sub"], name, selected_ontology)
+        return {
+            "entity": name,
+            "visuals": [
+                {
+                    "page": visual["page"],
+                    "caption": visual["caption"],
+                    "document_id": visual["document_id"],
+                    "document_title": visual["document_title"],
+                    "image_url": (
+                        f"/v1/knowledge/documents/{visual['document_id']}/visuals/{visual['page']}/image"
+                    ),
+                }
+                for visual in visuals
+            ],
+        }
+
+    @app.get("/v1/knowledge/stats")
+    async def knowledge_stats(claims: Claims, ontology: str | None = None) -> dict[str, Any]:
+        if ontology:
+            require_ontology(ontology)
+        namespace = f"knowledge:{claims['sub']}"
+        parts = ["stats", ontology or "all"]
+        if cached := await cache.get(namespace, parts):
+            return cached
+        result = await store.metrics(claims["sub"], ontology)
+        await cache.set(namespace, parts, result)
+        return result
 
     @app.get("/v1/knowledge/ontologies/{ontology_id}")
     async def ontology(ontology_id: str, _: Claims) -> dict[str, Any]:
@@ -220,6 +402,7 @@ def create_app(
         center: str | None = None,
         depth: int = 2,
         limit: int = 200,
+        document_id: Annotated[list[str] | None, Query()] = None,
     ) -> dict[str, Any]:
         selected = require_ontology(ontology)
         valid_types = {item.id for item in selected.entity_types}
@@ -232,19 +415,66 @@ def create_app(
                 "edge_count": len(result.get("edges", [])),
             }
             return result
-        return await store.browse(claims["sub"], limit, ontology, entity_type)
+        namespace = f"knowledge:{claims['sub']}"
+        selected_documents = sorted(document_id or [])
+        parts = [
+            "graph",
+            ontology,
+            entity_type or "all",
+            str(limit),
+            *selected_documents,
+        ]
+        if cached := await cache.get(namespace, parts):
+            return cached
+        result = await store.browse(claims["sub"], limit, ontology, entity_type, document_id)
+        await cache.set(namespace, parts, result)
+        return result
 
     @app.get("/v1/knowledge/semantic-search")
     async def semantic_search(
-        q: str, claims: Claims, limit: int = 10, ontology: str | None = None
+        q: str,
+        claims: Claims,
+        limit: int = 10,
+        ontology: str | None = None,
+        document_id: Annotated[list[str] | None, Query()] = None,
     ) -> dict[str, Any]:
         if ontology:
             require_ontology(ontology)
         try:
-            points = await vector_store.search(claims["sub"], q, limit, ontology)
+            points = await vector_store.search(claims["sub"], q, limit, ontology, document_id)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return {"results": points}
+
+    @app.get("/v1/knowledge/fused-search")
+    async def fused_search(
+        q: str,
+        claims: Claims,
+        limit: int = 10,
+        ontology: str = "core",
+        document_id: Annotated[list[str] | None, Query()] = None,
+    ) -> dict[str, Any]:
+        require_ontology(ontology)
+        namespace = f"knowledge:{claims['sub']}"
+        selected_documents = sorted(document_id or [])
+        parts = ["fused", ontology, q, str(limit), *selected_documents]
+        if cached := await cache.get(namespace, parts):
+            return cached
+        graph_result = await store.search(claims["sub"], q, limit, ontology, selected_documents)
+        try:
+            semantic_result = await vector_store.search(
+                claims["sub"], q, limit, ontology, selected_documents
+            )
+        except RuntimeError:
+            semantic_result = []
+        result = {
+            "query": q,
+            "graph": graph_result,
+            "semantic": semantic_result,
+            "strategy": "graph+vector",
+        }
+        await cache.set(namespace, parts, result)
+        return result
 
     @app.get("/v1/knowledge/neighbors/{name}")
     async def neighbors(
@@ -282,6 +512,10 @@ def create_app(
                 {"name": "graph.path", "arguments": ["source", "target", "ontology"]},
                 {"name": "graph.ontology", "arguments": ["ontology_id"]},
                 {"name": "vector.search", "arguments": ["query", "limit", "ontology"]},
+                {
+                    "name": "knowledge.fused-search",
+                    "arguments": ["query", "limit", "ontology", "document_ids"],
+                },
             ]
         }
 
@@ -337,6 +571,28 @@ def create_app(
                 }
             except RuntimeError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if call.name == "knowledge.fused-search":
+            ontology_id = call.arguments.get("ontology", "core")
+            require_ontology(ontology_id)
+            document_ids = call.arguments.get("document_ids") or []
+            graph_result = await store.search(
+                tenant,
+                call.arguments["query"],
+                call.arguments.get("limit", 10),
+                ontology_id,
+                document_ids,
+            )
+            try:
+                semantic_result = await vector_store.search(
+                    tenant,
+                    call.arguments["query"],
+                    call.arguments.get("limit", 10),
+                    ontology_id,
+                    document_ids,
+                )
+            except RuntimeError:
+                semantic_result = []
+            return {"graph": graph_result, "semantic": semantic_result}
         raise HTTPException(status_code=404, detail="Unknown MCP tool")
 
     @app.get("/health")
@@ -349,7 +605,9 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     async def ui() -> FileResponse:
-        return FileResponse(Path(__file__).parent / "static" / "knowledge.html")
+        response = FileResponse(Path(__file__).parent / "static" / "knowledge.html")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return response
 
     return app
 

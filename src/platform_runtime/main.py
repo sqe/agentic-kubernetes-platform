@@ -5,10 +5,12 @@ import uvicorn
 from .settings import settings
 
 APPLICATIONS = {
+    "analytics": "analytics_agent.app:app",
     "knowledge-api": "knowledge_graph_agent.app:app",
     "knowledge-worker": "knowledge_graph_agent.worker:app",
     "registry": "registry_service.app:app",
     "supervisor": "supervisor_service.app:app",
+    "vision": "vision_agent.app:app",
     "weather": "weather_agent.app:app",
 }
 

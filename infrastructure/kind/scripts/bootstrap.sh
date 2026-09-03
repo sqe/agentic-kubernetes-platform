@@ -13,15 +13,16 @@ context="kind-$cluster_name"
 namespace=agentic-platform
 
 kubectl --context "$context" apply --server-side -f \
-  "https://github.com/kubernetes-sigs/gateway-api/releases/download/v${gateway_api_version}/standard-install.yaml"
+  "https://github.com/kubernetes-sigs/gateway-api/releases/download/v${gateway_api_version}/experimental-install.yaml"
 helm repo add cilium https://helm.cilium.io --force-update
 helm upgrade --install cilium cilium/cilium --kube-context "$context" -n kube-system \
-  --version "$cilium_version" -f "$repository_root/deploy/cilium/values-common.yaml" \
+  --version "$cilium_version" \
+  -f "$repository_root/deploy/cilium/values-common.yaml" \
+  -f "$repository_root/deploy/cilium/values-kind.yaml" \
   --set k8sServiceHost="${cluster_name}-control-plane" --set k8sServicePort=6443 \
-  --set gatewayAPI.hostNetwork.enabled=true \
-  --set envoy.securityContext.capabilities.keepCapNetBindService=true \
-  --set 'envoy.securityContext.capabilities.envoy[0]=NET_BIND_SERVICE' \
   --wait --timeout 10m
+kubectl --context "$context" -n kube-system rollout restart deployment/cilium-operator
+kubectl --context "$context" -n kube-system rollout status deployment/cilium-operator --timeout=5m
 
 helm repo add kedacore https://kedacore.github.io/charts --force-update
 helm upgrade --install keda kedacore/keda --kube-context "$context" -n keda \
@@ -29,6 +30,8 @@ helm upgrade --install keda kedacore/keda --kube-context "$context" -n keda \
 
 kubectl --context "$context" create namespace "$namespace" --dry-run=client -o yaml | \
   kubectl --context "$context" apply -f -
+kubectl --context "$context" label node "${cluster_name}-worker" \
+  workload=knowledge-extraction --overwrite
 operator_manifest=$(mktemp)
 trap 'rm -f "$operator_manifest"' EXIT
 curl -fsSL \
@@ -77,11 +80,12 @@ spec:
     spec:
       containers:
         - name: rustfs
-          image: rustfs/rustfs:v1.0.0
+          image: rustfs/rustfs@sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21
           args: [/data]
           env:
             - {name: RUSTFS_ACCESS_KEY, value: local-access-key}
             - {name: RUSTFS_SECRET_KEY, value: local-secret-key}
+            - {name: RUSTFS_SSE_S3_MASTER_KEY, value: bG9jYWwtZGV2ZWxvcG1lbnQtc3NlLWtleS0wMDAwMXg=}
           ports: [{name: s3, containerPort: 9000}]
           volumeMounts: [{name: data, mountPath: /data}]
       volumes: [{name: data, emptyDir: {}}]
@@ -91,10 +95,40 @@ kind: Service
 metadata: {name: rustfs}
 spec: {selector: {app: rustfs}, ports: [{name: s3, port: 9000, targetPort: s3}]}
 YAML
+kubectl --context "$context" -n "$namespace" rollout status deployment/rustfs --timeout=5m
+kubectl --context "$context" -n "$namespace" delete job rustfs-create-bucket \
+  --ignore-not-found --wait=true
+kubectl --context "$context" -n "$namespace" apply -f - <<'YAML'
+apiVersion: batch/v1
+kind: Job
+metadata: {name: rustfs-create-bucket}
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: aws-cli
+          image: amazon/aws-cli:2.27.49
+          command: [/bin/sh, -c]
+          args:
+            - >-
+              until aws --endpoint-url http://rustfs:9000 s3api head-bucket
+              --bucket agent-documents 2>/dev/null ||
+              aws --endpoint-url http://rustfs:9000 s3 mb s3://agent-documents;
+              do sleep 2; done
+          env:
+            - {name: AWS_ACCESS_KEY_ID, value: local-access-key}
+            - {name: AWS_SECRET_ACCESS_KEY, value: local-secret-key}
+            - {name: AWS_DEFAULT_REGION, value: us-east-1}
+YAML
+kubectl --context "$context" -n "$namespace" wait --for=condition=Complete \
+  job/rustfs-create-bucket --timeout=5m
 
 kubectl --context "$context" -n "$namespace" create secret generic platform-runtime-secrets \
   --from-literal=POSTGRES_URL=postgresql://agents:local-password@postgresql:5432/agents \
   --from-literal=REDIS_URL=redis://default:local-password@redis:6379/0 \
+  --from-literal=AUTH_DISABLED=true \
   --dry-run=client -o yaml | kubectl --context "$context" apply -f -
 kubectl --context "$context" -n "$namespace" create secret generic platform-postgresql-secret \
   --from-literal=database=agents --from-literal=username=agents --from-literal=password=local-password \
@@ -108,7 +142,16 @@ kubectl --context "$context" -n "$namespace" create secret generic knowledge-sec
   --from-literal=neo4j-auth=neo4j/local-password --from-literal=neo4j-password=local-password \
   --dry-run=client -o yaml | kubectl --context "$context" apply -f -
 kubectl --context "$context" -n "$namespace" create secret generic knowledge-runtime-secrets \
-  --from-literal=AUTH_DISABLED=true --from-literal=AWS_ACCESS_KEY_ID=local-access-key \
+  --from-literal=AUTH_DISABLED=false \
+  --from-literal=JWT_ISSUER=http://127.0.0.1:8080/realms/agentic-platform \
+  --from-literal=JWT_JWKS_URL=http://platform-agentic-platform-keycloak-service:8080/realms/agentic-platform/protocol/openid-connect/certs \
+  --from-literal=JWT_AUDIENCE=knowledge-graph-ui \
+  --from-literal=OIDC_CLIENT_ID=knowledge-graph-ui \
+  --from-literal=OIDC_AUTHORIZATION_ENDPOINT=http://127.0.0.1:8080/realms/agentic-platform/protocol/openid-connect/auth \
+  --from-literal=OIDC_TOKEN_ENDPOINT=http://127.0.0.1:8080/realms/agentic-platform/protocol/openid-connect/token \
+  --from-literal=OIDC_LOGOUT_ENDPOINT=http://127.0.0.1:8080/realms/agentic-platform/protocol/openid-connect/logout \
+  --from-literal='OIDC_REGISTRATION_ENDPOINT=http://127.0.0.1:8080/realms/agentic-platform/protocol/openid-connect/auth?kc_action=register' \
+  --from-literal=AWS_ACCESS_KEY_ID=local-access-key \
   --from-literal=AWS_SECRET_ACCESS_KEY=local-secret-key \
   --from-literal=AWS_DEFAULT_REGION=us-east-1 \
   --dry-run=client -o yaml | kubectl --context "$context" apply -f -
@@ -123,8 +166,17 @@ if [[ "$build_image" == "true" ]]; then
   docker build -f "$repository_root/images/runtime/Dockerfile" -t "$runtime_image" "$repository_root"
 fi
 kind load docker-image "$runtime_image" --name "$cluster_name"
+platform_values=(-f "$repository_root/deploy/helm/agentic-platform/values-kind.yaml")
+if kubectl --context "$context" -n "$namespace" get \
+  cubecluster.platform.cube.dev/agentic-analytics >/dev/null 2>&1; then
+  platform_values+=(-f "$repository_root/deploy/helm/agentic-platform/values-cube-kind.yaml")
+fi
 helm upgrade --install platform "$repository_root/deploy/helm/agentic-platform" \
   --kube-context "$context" -n "$namespace" \
-  -f "$repository_root/deploy/helm/agentic-platform/values-kind.yaml" --wait --timeout 15m
+  "${platform_values[@]}" --wait --timeout 15m
+kubectl --context "$context" -n "$namespace" rollout restart deployment \
+  -l app.kubernetes.io/instance=platform
+kubectl --context "$context" -n "$namespace" rollout status deployment \
+  -l app.kubernetes.io/instance=platform --timeout=10m
 kubectl --context "$context" -n "$namespace" wait --for=condition=Programmed \
   gateway/agentic-platform --timeout=5m

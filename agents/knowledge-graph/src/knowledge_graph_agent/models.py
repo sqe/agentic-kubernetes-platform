@@ -26,6 +26,7 @@ class Entity(BaseModel):
     name: str = Field(min_length=1, max_length=500)
     type: str = Field(default="concept", max_length=100)
     description: str = Field(default="", max_length=2_000)
+    aliases: list[str] = Field(default_factory=list, max_length=50)
 
 
 class Relationship(BaseModel):

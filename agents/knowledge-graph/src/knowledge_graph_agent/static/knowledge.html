@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Interactive 2D and 3D knowledge graph explorer">
   <title>Knowledge Graph Explorer</title>
-  <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <link rel="icon" href="data:,">
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
   <script src="https://unpkg.com/3d-force-graph@1.79.0/dist/3d-force-graph.min.js"></script>
   <style>
     :root { color-scheme: dark; font: 15px system-ui; background: #070b16; color: #e8eefc; }
@@ -17,40 +19,128 @@
     input, textarea, select, button { width: 100%; padding: 9px; border-radius: 6px; border: 1px solid #344564; background: #101a30; color: inherit; }
     textarea { min-height: 130px; resize: vertical; }
     button { margin-top: 8px; cursor: pointer; background: #3157d5; border: 0; font-weight: 650; }
+    button:hover { background: #4269e8; transform: translateY(-1px); }
+    button:disabled { opacity: .55; cursor: wait; }
     .row { display: flex; gap: 8px; }
     .row button { width: auto; flex: 1; }
+    .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin: 12px 0; }
+    .metric { padding: 9px; border: 1px solid #26334f; border-radius: 7px; background: #101a30; }
+    .metric strong { display: block; color: #8fb0ff; font-size: 18px; }
+    .metric span { color: #9fb0d0; font-size: 11px; }
+    #documents { min-height: 90px; }
+    #documents option { padding: 5px; }
     #status { white-space: pre-wrap; font-size: 12px; color: #9fb0d0; }
-    main, #graph { width: 100%; height: 100%; }
+    #progressPanel { margin-top: 14px; padding: 12px; border: 1px solid #26334f; border-radius: 8px; background: #101a30; display: none; }
+    #progressPanel h3 { margin: 0 0 8px; font-size: 14px; color: #8fb0ff; }
+    #progressBar { height: 8px; border-radius: 4px; background: #1a2540; overflow: hidden; margin-bottom: 8px; }
+    #progressFill { height: 100%; width: 0%; background: linear-gradient(90deg, #3157d5, #5b8cff); transition: width 0.3s ease; }
+    #progressText { font-size: 12px; color: #e8eefc; margin-bottom: 4px; }
+    #progressPhase { font-size: 11px; color: #9fb0d0; margin-bottom: 8px; }
+    #progressLog { max-height: 160px; overflow-y: auto; font-size: 11px; color: #9fb0d0; border-top: 1px solid #26334f; padding-top: 6px; }
+    #progressLog div { padding: 2px 0; border-bottom: 1px solid #1a2540; }
+    #progressLog div:last-child { border-bottom: none; }
+    #progressLog .ts { color: #5b8cff; margin-right: 6px; }
+    #tooltip {
+      position: fixed; pointer-events: none; z-index: 1000;
+      background: #0c1324; border: 1px solid #26334f; border-radius: 8px;
+      padding: 8px; max-width: 280px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      display: none;
+    }
+    #tooltip img { width: 100%; max-height: 160px; object-fit: cover; border-radius: 4px; margin-bottom: 6px; }
+    #tooltip .caption { font-size: 11px; color: #aebbd1; max-height: 60px; overflow: hidden; }
+    #tooltip .label { font-size: 12px; color: #e8eefc; font-weight: 600; margin-bottom: 4px; }
+    main { min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+    main::after {
+      content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 2;
+      background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(109, 247, 255, .018) 4px),
+        radial-gradient(circle at 50% 50%, transparent 48%, rgba(1, 4, 12, .32) 100%);
+      mix-blend-mode: screen;
+    }
+    #graph {
+      width: 100%; height: 100%; min-height: 100vh;
+      background: radial-gradient(circle at 50% 50%, #0c1324 0%, #070b16 70%);
+      box-shadow: inset 0 0 80px rgba(91, 140, 255, 0.08), inset 0 0 160px rgba(91, 140, 255, 0.04);
+    }
     #details { position: fixed; top: 16px; right: 16px; max-width: 320px; max-height: 45vh; overflow: auto; padding: 14px; border: 1px solid #344564; border-radius: 8px; background: #0c1324ee; white-space: pre-wrap; font-size: 12px; display: none; z-index: 10; }
+    #details {
+      box-shadow: 0 0 24px rgba(255, 32, 32, 0.28), inset 0 0 24px rgba(255, 32, 32, 0.07), 0 8px 32px rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 50, 50, 0.62);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #details::after { content: ''; position: sticky; display: block; inset: 0; height: 1px; margin-top: -1px; background: #ff303088; box-shadow: 0 0 8px #ff2020; animation: hudScan 2.8s linear infinite; pointer-events: none; }
+    .details-handle { cursor: move; color: #ff3636; font: 700 10px monospace; letter-spacing: .12em; margin: -4px 0 10px; user-select: none; text-shadow: 0 0 8px #ff2020; }
+    .hud-heading { color: #ff4b4b !important; text-transform: uppercase; letter-spacing: .08em; }
+    .hud-cursor::after { content: '▋'; color: #ff3434; animation: hudBlink .7s step-end infinite; }
+    @keyframes hudBlink { 50% { opacity: 0; } }
+    @keyframes hudScan { from { transform: translateY(-40vh); } to { transform: translateY(4vh); } }
   </style>
 </head>
 <body>
+  <div id="tooltip">
+    <div class="label"></div>
+    <img src="" alt="" />
+    <div class="caption"></div>
+  </div>
   <aside>
     <h1>Knowledge Graph Explorer</h1>
     <p>Ingest a document in the background, then explore entities and trace relationships.</p>
     <div class="row"><button id="login" onclick="authorize(false)">Log in</button><button id="signup" onclick="authorize(true)">Create account</button></div>
     <button id="logout" onclick="logout()" hidden>Log out</button>
     <p id="identity">Not signed in</p>
+    <div id="knowledgeMetrics" class="metrics"></div>
     <label for="title">Document title</label><input id="title" value="Space telescope research">
     <label for="ontology">Ontology</label><select id="ontology"></select>
     <label for="text">Document text</label><textarea id="text" placeholder="Paste extracted document text"></textarea>
     <button onclick="ingest()">Queue ingestion</button>
     <label for="file">Or upload PDF, text, or JSON</label><input id="file" type="file" accept=".pdf,.txt,.json">
-    <button onclick="upload()">Upload and queue</button>
+    <button id="uploadButton" onclick="upload()">Upload and queue</button>
+    <p id="status"></p>
+    <div id="progressPanel">
+      <h3 id="progressTitle">Ingestion progress</h3>
+      <div id="progressBar"><div id="progressFill"></div></div>
+      <div id="progressText"></div>
+      <div id="progressPhase"></div>
+      <div id="progressLog"></div>
+    </div>
+    <label for="documents">Knowledge sources</label>
+    <select id="documents" multiple onchange="browse()"></select>
+    <small>Nothing selected shows the complete institutional graph.</small>
+    <div class="row"><button onclick="previewDocument()">Preview file</button><button onclick="showVisuals()">Visual evidence</button></div>
+    <div class="row"><button onclick="showExtracted()">Extracted data</button><button onclick="showExtractedText()">Extracted text</button></div>
     <label for="query">Entity search</label><input id="query" placeholder="telescope">
     <button onclick="search()">Search graph</button>
     <button onclick="browse()">Browse graph</button>
-    <button onclick="semanticSearch()">Search document meaning</button>
+    <button onclick="semanticSearch()">Fused graph + semantic search</button>
     <label for="typeFilter">Entity type</label><select id="typeFilter" onchange="draw()"><option value="">All types</option></select>
+    <label for="viewFilter">Connection view</label>
+    <select id="viewFilter" onchange="viewChanged()">
+      <option value="atlas" selected>ForceAtlas knowledge map</option>
+      <option value="focus">Selected neighborhood</option>
+      <option value="buddhabrot">Buddhabrot fractal</option>
+      <option value="dragon">Dragon fractal</option>
+      <option value="julia">Julia nebula</option>
+      <option value="sierpinski">Sierpiński tetrahedron</option>
+      <option value="hausdorff">Hausdorff Cantor dust</option>
+      <option value="tesseract">4D tesseract fractal</option>
+      <option value="life">Conway Life matrix</option>
+      <option value="cinema">Fractal cinema</option>
+      <option value="all">Complete graph</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;color:#9fb0d0;"><input type="checkbox" id="hideReferences" checked onchange="draw()"> Hide low-value reference nodes</label>
+    <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;color:#9fb0d0;"><input type="checkbox" id="toggleUnlinked" onchange="showUnlinked=this.checked;draw()"> Show unlinked nodes</label>
+    <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;color:#9fb0d0;"><input type="checkbox" id="showTargetDetails" checked onchange="toggleTargetDetails()"> Show target details</label>
     <label>Trace shortest path</label>
     <input id="source" placeholder="Source entity"><input id="target" placeholder="Target entity">
     <button onclick="tracePath()">Trace path</button>
-    <div class="row"><button onclick="setMode('2d')">2D</button><button onclick="setMode('3d')">3D</button></div>
-    <p id="status"></p>
+    <div class="row"><button onclick="setMode('2d')">2D</button><button onclick="setMode('3d')">3D</button><button onclick="setMode('4d')">4D</button></div>
+    <div class="row"><button onclick="startTour()">▶ Graph movie</button><button onclick="pauseTour()">Pause</button></div>
   </aside>
   <main><div id="graph"></div><div id="details"></div></main>
   <script>
-    let mode = '2d', current = {nodes: [], edges: []}, renderer, ontologyTypes = {}, authConfig;
+    let mode = '2d', current = {nodes: [], edges: []}, renderer, twoDimensionalNodes, ontologyTypes = {}, authConfig, dashboardTimer, stabilizationTimer, tourTimer, fractalTimer, lifeTimer, graphFrame, fourDimensionalFrame, fourDimensionalHalo, fourDimensionalHaloSource = [], graphGeneration = 0, focusedNode = null, tourFocusNode = null, tourIndex = 0, tourSequence = [], cinemaPhase = 0, fractalMode = '', lifeColumns = 0, lifeGeneration = 0, lifeOrder = [], lifeState = new Map();
+    const imageUrls = new Map(), hudByNode = new Map(), glowByNode = new Map(), tileByNode = new Map(), glyphByNode = new Map(), voxelTextures = new Map();
+    let fractalGuidePoints = [];
+    let detailsWriteGeneration = 0, redGlowTexture;
     const token = () => sessionStorage.getItem('id_token') || '';
     const headers = () => token() ? {'Content-Type': 'application/json', Authorization: `Bearer ${token()}`} : {'Content-Type': 'application/json'};
     const status = value => document.querySelector('#status').textContent = value;
@@ -58,6 +148,7 @@
     const base64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     function randomValue() { return base64url(crypto.getRandomValues(new Uint8Array(32))); }
     async function authorize(signupRequested) {
+      if (!authConfig?.enabled) { status('Authentication is disabled in this local environment.'); return; }
       const verifier = randomValue(), state = randomValue();
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
       sessionStorage.setItem('pkce_verifier', verifier); sessionStorage.setItem('oauth_state', state);
@@ -81,10 +172,13 @@
       history.replaceState({}, '', location.pathname);
     }
     function showIdentity() {
-      const value = token(); login.hidden = signup.hidden = Boolean(value); logout.hidden = !value;
-      if (!value) { identity.textContent = authConfig?.enabled ? 'Not signed in' : 'Local development mode'; return; }
-      try { const claims = JSON.parse(atob(value.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))); identity.textContent = claims.email || claims.preferred_username || claims.sub; }
-      catch { identity.textContent = 'Signed in'; }
+      const value = token(), enabled = Boolean(authConfig?.enabled);
+      const loginButton = document.querySelector('#login'), signupButton = document.querySelector('#signup');
+      const logoutButton = document.querySelector('#logout'), identityLabel = document.querySelector('#identity');
+      loginButton.hidden = signupButton.hidden = !enabled || Boolean(value); logoutButton.hidden = !enabled || !value;
+      if (!value) { identityLabel.textContent = enabled ? 'Not signed in' : 'Local development mode'; return; }
+      try { const claims = JSON.parse(atob(value.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))); identityLabel.textContent = claims.email || claims.preferred_username || claims.sub; }
+      catch { identityLabel.textContent = 'Signed in'; }
     }
     function logout() {
       const hint = sessionStorage.getItem('logout_hint'); sessionStorage.clear();
@@ -98,25 +192,115 @@
     }
     async function request(url, options = {}) {
       const response = await fetch(url, {...options, headers: headers()});
-      const body = await response.json();
+      const body = await responseBody(response);
       if (!response.ok) throw new Error(body.detail || JSON.stringify(body));
       return body;
     }
+    async function responseBody(response) {
+      const text = await response.text();
+      if (!text) return {};
+      try { return JSON.parse(text); }
+      catch { return {detail: text}; }
+    }
+    let progressSource = null;
+    function connectProgress(taskId) {
+      if (progressSource) progressSource.abort();
+      const panel = document.querySelector('#progressPanel');
+      const fill = document.querySelector('#progressFill');
+      const text = document.querySelector('#progressText');
+      const phase = document.querySelector('#progressPhase');
+      const log = document.querySelector('#progressLog');
+      panel.style.display = 'block';
+      fill.style.width = '0%';
+      text.textContent = 'Starting…';
+      phase.textContent = '';
+      log.replaceChildren();
+      const addLog = (msg) => {
+        const div = document.createElement('div');
+        const ts = document.createElement('span');
+        ts.className = 'ts';
+        ts.textContent = new Date().toLocaleTimeString();
+        div.appendChild(ts);
+        div.appendChild(document.createTextNode(msg));
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+      };
+      progressSource = new AbortController();
+      const updateProgress = (d) => {
+        let pct = 0;
+        if (d.phase === 'vision') {
+          pct = d.pages_total ? Math.round((d.pages_done / d.pages_total) * 100) : 0;
+          text.textContent = d.current;
+          phase.textContent = d.latest_event || '';
+          if (d.pages_done > 0) addLog(`Page ${d.pages_done}/${d.pages_total}: ${d.latest_event || 'analyzed'}`);
+        } else if (d.phase === 'extraction') {
+          pct = d.chunks_total ? Math.round((d.chunks_done / d.chunks_total) * 100) : 0;
+          text.textContent = d.current;
+          phase.textContent = `${d.entities} entities, ${d.relationships} relationships so far`;
+          if (d.chunks_done > 0) addLog(`Chunk ${d.chunks_done}/${d.chunks_total}: ${d.latest_event}`);
+        } else if (d.phase === 'complete') {
+          pct = 100;
+          text.textContent = d.current;
+          phase.textContent = d.latest_event;
+          addLog(`✓ ${d.latest_event}`);
+        } else if (d.phase === 'error') {
+          text.textContent = d.current;
+          phase.textContent = d.latest_event;
+          addLog(`✗ ${d.latest_event}`);
+        }
+        fill.style.width = pct + '%';
+      };
+      (async () => {
+        try {
+          const response = await fetch(`/v1/knowledge/progress/${taskId}`, {
+            headers: token() ? {Authorization: `Bearer ${token()}`} : {},
+            signal: progressSource.signal
+          });
+          if (!response.ok) throw new Error((await responseBody(response)).detail || 'Progress unavailable');
+          addLog('Connected to progress stream');
+          const reader = response.body.getReader(), decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const {value, done} = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+            const events = buffer.split('\n\n'); buffer = events.pop();
+            for (const event of events) {
+              const data = event.split('\n').find(line => line.startsWith('data: '));
+              if (data) updateProgress(JSON.parse(data.slice(6)));
+            }
+            if (done) break;
+          }
+        } catch (error) {
+          if (error.name !== 'AbortError') addLog(`Progress: ${error.message}`);
+        }
+      })();
+    }
     async function ingest() {
       try {
-        const body = {document_id: crypto.randomUUID(), title: title.value, text: text.value, ontology: ontology.value};
-        status(JSON.stringify(await request('/v1/knowledge/documents', {method: 'POST', body: JSON.stringify(body)}), null, 2));
+        const body = {document_id: crypto.randomUUID(), title: document.querySelector('#title').value, text: document.querySelector('#text').value, ontology: document.querySelector('#ontology').value};
+        const result = await request('/v1/knowledge/documents', {method: 'POST', body: JSON.stringify(body)});
+        status(JSON.stringify(result, null, 2));
+        if (result.task_id) connectProgress(result.task_id);
       } catch (error) { status(error.message); }
     }
     async function upload() {
+      const input = document.querySelector('#file'), button = document.querySelector('#uploadButton');
       try {
-        const form = new FormData(); form.append('title', title.value); form.append('ontology', ontology.value); form.append('file', file.files[0]);
+        if (!input.files.length) throw new Error('Choose a PDF, text, or JSON file first.');
+        const documentTitle = document.querySelector('#title').value.trim();
+        if (!documentTitle) throw new Error('Enter a document title.');
+        button.disabled = true; status(`Uploading ${input.files[0].name}…`);
+        const form = new FormData(); form.append('title', documentTitle); form.append('ontology', document.querySelector('#ontology').value); form.append('file', input.files[0]);
         const response = await fetch('/v1/knowledge/documents/upload', {
           method: 'POST', headers: token() ? {Authorization: `Bearer ${token()}`} : {}, body: form
         });
-        const body = await response.json(); if (!response.ok) throw new Error(body.detail || JSON.stringify(body));
+        const body = await responseBody(response); if (!response.ok) throw new Error(body.detail || JSON.stringify(body));
         status(JSON.stringify(body, null, 2));
+        if (body.task_id) connectProgress(body.task_id);
+        input.value = '';
+        await loadDashboard();
       } catch (error) { status(error.message); }
+      finally { button.disabled = false; }
     }
     async function search() {
       try { current = await request(`/v1/knowledge/search?q=${encodeURIComponent(query.value)}&ontology=${encodeURIComponent(ontology.value)}`); draw(); }
@@ -124,52 +308,940 @@
     }
     async function browse() {
       try {
-        const type = typeFilter.value ? `&entity_type=${encodeURIComponent(typeFilter.value)}` : '';
-        current = await request(`/v1/knowledge/graph?ontology=${encodeURIComponent(ontology.value)}&limit=500${type}`);
+        const params = new URLSearchParams({ontology: document.querySelector('#ontology').value, limit: '500'});
+        const type = document.querySelector('#typeFilter').value;
+        if (type) params.set('entity_type', type);
+        selectedDocuments().forEach(id => params.append('document_id', id));
+        current = await request(`/v1/knowledge/graph?${params}`);
         draw();
       } catch (error) { status(error.message); }
     }
     async function semanticSearch() {
       try {
-        const result = await request(`/v1/knowledge/semantic-search?q=${encodeURIComponent(query.value)}&ontology=${encodeURIComponent(ontology.value)}`);
-        status(result.results.map(item => `${Number(item.score).toFixed(3)} · ${item.payload.title}\n${item.payload.chunk}`).join('\n\n') || 'No semantic matches');
+        const params = new URLSearchParams({q: document.querySelector('#query').value, ontology: document.querySelector('#ontology').value});
+        selectedDocuments().forEach(id => params.append('document_id', id));
+        const result = await request(`/v1/knowledge/fused-search?${params}`);
+        current = result.graph; draw();
+        status(result.semantic.map(item => `${Number(item.score).toFixed(3)} · ${item.payload.title}\n${item.payload.chunk}`).join('\n\n') || `${current.nodes.length} graph matches`);
+      } catch (error) { status(error.message); }
+    }
+    function selectedDocuments() {
+      return [...document.querySelector('#documents').selectedOptions].map(option => option.value);
+    }
+    async function previewDocument() {
+      const id = selectedDocuments()[0]; if (!id) { status('Select one knowledge source first.'); return; }
+      try {
+        const response = await fetch(`/v1/knowledge/documents/${id}/preview`, {headers: token() ? {Authorization: `Bearer ${token()}`} : {}});
+        if (!response.ok) throw new Error((await responseBody(response)).detail || 'Preview failed');
+        open(URL.createObjectURL(await response.blob()), '_blank');
+      } catch (error) { status(error.message); }
+    }
+    async function showVisuals() {
+      const id = selectedDocuments()[0]; if (!id) { status('Select one knowledge source first.'); return; }
+      try {
+        const result = await request(`/v1/knowledge/documents/${id}/visuals`);
+        status(result.visuals.map(item => `Page ${item.page}\n${item.caption}`).join('\n\n') || 'No visual evidence extracted.');
+      } catch (error) { status(error.message); }
+    }
+    async function showExtracted() {
+      const id = selectedDocuments()[0]; if (!id) { status('Select one knowledge source first.'); return; }
+      try {
+        const result = await request(`/v1/knowledge/documents/${id}/extracted`);
+        if (result.graph) {
+          const entities = result.graph.entities || [];
+          const relationships = result.graph.relationships || [];
+          status(`Extracted graph:\n${entities.length} entities, ${relationships.length} relationships\n\n${JSON.stringify(result.graph, null, 2)}`);
+        } else {
+          status('No extracted graph data available.');
+        }
+      } catch (error) { status(error.message); }
+    }
+    async function showExtractedText() {
+      const id = selectedDocuments()[0]; if (!id) { status('Select one knowledge source first.'); return; }
+      try {
+        const result = await request(`/v1/knowledge/documents/${id}/extracted`);
+        if (result.text) {
+          status(`Extracted text (${result.text.length} chars):\n\n${result.text.slice(0, 5000)}${result.text.length > 5000 ? '\n… (truncated)' : ''}`);
+        } else {
+          status('No extracted text available.');
+        }
+      } catch (error) { status(error.message); }
+    }
+    async function loadDashboard() {
+      clearTimeout(dashboardTimer);
+      const ontologyId = document.querySelector('#ontology').value;
+      if (!ontologyId) return;
+      try {
+        const [catalog, metrics] = await Promise.all([
+          request(`/v1/knowledge/documents?ontology=${encodeURIComponent(ontologyId)}`),
+          request(`/v1/knowledge/stats?ontology=${encodeURIComponent(ontologyId)}`)
+        ]);
+        const selected = new Set(selectedDocuments()), list = document.querySelector('#documents');
+        list.replaceChildren(...catalog.documents.map(item => {
+          const counts = item.status === 'completed' ? ` · ${item.entity_count || 0} entities` : '';
+          const option = new Option(`${item.status.toUpperCase()} · ${item.title}${counts}`, item.id);
+          option.selected = selected.has(item.id); return option;
+        }));
+        const cards = [['Documents', metrics.documents], ['Pictures', metrics.visuals], ['Entities', metrics.entities], ['Relationships', metrics.relationships], ['Vector chunks', metrics.vectors], ['Queued', metrics.queued], ['Processing', metrics.processing]];
+        document.querySelector('#knowledgeMetrics').innerHTML = cards.map(([label, value]) => `<div class="metric"><strong>${value || 0}</strong><span>${label}</span></div>`).join('');
+        if (metrics.queued || metrics.processing) dashboardTimer = setTimeout(loadDashboard, 4000);
       } catch (error) { status(error.message); }
     }
     async function tracePath() {
       try { current = await request(`/v1/knowledge/path?source=${encodeURIComponent(source.value)}&target=${encodeURIComponent(target.value)}&ontology=${encodeURIComponent(ontology.value)}`); draw(); }
       catch (error) { status(error.message); }
     }
-    function setMode(value) { mode = value; draw(); }
-    function draw() {
-      const selectedType = typeFilter.value;
-      const nodes = current.nodes.filter(n => !selectedType || n.type === selectedType);
-      const nodeIds = new Set(nodes.map(n => n.id));
-      const edges = current.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
-      document.querySelector('#graph').replaceChildren();
-      if (mode === '2d') {
-        renderer = cytoscape({container: graph, elements: [
-          ...nodes.map(n => ({data: {...n, id: n.id, label: n.name, color: ontologyTypes[n.type]?.color || '#5b8cff'}})),
-          ...edges.map((e, i) => ({data: {...e, id: `e${i}`, label: e.type}}))
-        ], style: [
-          {selector: 'node', style: {'label': 'data(label)', 'background-color': 'data(color)', 'color': '#fff', 'text-valign': 'bottom', 'text-margin-y': 7, 'width': 'mapData(degree, 0, 20, 24, 56)', 'height': 'mapData(degree, 0, 20, 24, 56)'}},
-          {selector: 'edge', style: {'label': 'data(label)', 'line-color': '#536887', 'target-arrow-shape': 'triangle', 'target-arrow-color': '#536887', 'curve-style': 'bezier', 'font-size': 10, 'color': '#aebbd1'}}
-        ], layout: {name: 'cose', animate: false}});
-        renderer.nodes().forEach(node => node.data('degree', node.degree()));
-        renderer.on('tap', 'node, edge', event => showDetails(event.target.data()));
-      } else {
-        renderer = ForceGraph3D()(graph).backgroundColor('#070b16').graphData({
-          nodes: nodes.map(n => ({...n, id: n.id})),
-          links: edges.map(e => ({source: e.source, target: e.target, label: e.type}))
-        }).nodeLabel(n => `${n.name} (${n.type})`).nodeColor(n => ontologyTypes[n.type]?.color || '#5b8cff')
-          .nodeVal(n => 2 + edges.filter(e => e.source === n.id || e.target === n.id).length)
-          .linkDirectionalArrowLength(4).linkDirectionalParticles(2).linkDirectionalParticleSpeed(0.004)
-          .onNodeClick(n => { showDetails(n); renderer.cameraPosition({x: n.x + 100, y: n.y + 100, z: n.z + 100}, n, 800); })
-          .onLinkClick(link => showDetails(link));
+    function setMode(value) { pauseTour(); mode = value; draw(); }
+    function viewChanged() {
+      if (document.querySelector('#viewFilter').value === 'all') focusedNode = null;
+      cinemaPhase = 0;
+      draw();
+    }
+    let showUnlinked = false;
+    function deterministicRandom(seed = 0x51f15e) {
+      let state = seed >>> 0;
+      return () => ((state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296);
+    }
+    function normalizeFractal(points, nodes, depth = 0.32) {
+      if (!points.length) points = [{x: 0, y: 0}];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      points.forEach(point => { minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x); minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y); });
+      const span = Math.max(maxX - minX, maxY - minY, 0.001);
+      const scale = Math.max(1500, Math.sqrt(nodes.length) * 185);
+      fractalGuidePoints = points.map((point, index) => ({
+        x: (point.x - (minX + maxX) / 2) / span * scale,
+        y: (point.y - (minY + maxY) / 2) / span * scale,
+        z: point.z === undefined ? Math.sin(index * 2.399963 + point.x * 3) * scale * depth : point.z / span * scale,
+        w: (point.w || 0) / span * scale
+      }));
+      const positions = new Map();
+      nodes.forEach((node, index) => {
+        positions.set(node.id, fractalGuidePoints[Math.floor(index * fractalGuidePoints.length / Math.max(nodes.length, 1))] || {x: 0, y: 0, z: 0});
+      });
+      return positions;
+    }
+    function buddhabrotPositions(nodes) {
+      const random = deterministicRandom(), width = 190, height = 170, density = new Uint32Array(width * height);
+      const samples = Math.max(28000, nodes.length * 180);
+      for (let sample = 0; sample < samples; sample++) {
+        const cx = -2.05 + random() * 3.15, cy = -1.45 + random() * 2.9;
+        let x = 0, y = 0; const orbit = [];
+        for (let iteration = 0; iteration < 112; iteration++) {
+          orbit.push({x, y});
+          const nextX = x * x - y * y + cx;
+          y = 2 * x * y + cy; x = nextX;
+          if (x * x + y * y > 16) {
+            if (iteration > 12) orbit.slice(4).forEach(point => {
+              const column = Math.floor((point.x + 2.05) / 3.15 * width);
+              const row = Math.floor((point.y + 1.45) / 2.9 * height);
+              if (column >= 0 && column < width && row >= 0 && row < height) density[row * width + column]++;
+            });
+            break;
+          }
+        }
       }
-      status(`${nodes.length} nodes, ${edges.length} relationships`);
+      const field = [];
+      density.forEach((count, index) => {
+        if (!count) return;
+        const weight = Math.sqrt(count), copies = Math.max(1, Math.round(weight / 2));
+        for (let copy = 0; copy < copies; copy++) field.push({
+          x: -2.05 + ((index % width) + random()) / width * 3.15,
+          y: -1.45 + (Math.floor(index / width) + random()) / height * 2.9,
+          weight
+        });
+      });
+      field.sort((a, b) => Math.atan2(a.y, a.x + 0.45) - Math.atan2(b.y, b.x + 0.45) || b.weight - a.weight);
+      const guide = field.length > 12000 ? Array.from({length: 12000}, (_, index) => field[Math.floor(index * field.length / 12000)]) : field;
+      return normalizeFractal(guide, nodes, 0.42);
+    }
+    function dragonPositions(nodes) {
+      let points = [{x: 0, y: 0}, {x: 1, y: 0}];
+      while (points.length < Math.max(2048, nodes.length * 12)) {
+        const pivot = points.at(-1), extension = [];
+        for (let index = points.length - 2; index >= 0; index--) {
+          const dx = points[index].x - pivot.x, dy = points[index].y - pivot.y;
+          extension.push({x: pivot.x - dy, y: pivot.y + dx});
+        }
+        points = points.concat(extension);
+      }
+      return normalizeFractal(points, nodes, 0.3);
+    }
+    function juliaPositions(nodes) {
+      const points = [], width = 230, height = 180, cx = -0.835, cy = -0.2321;
+      for (let row = 0; row < height; row++) for (let column = 0; column < width; column++) {
+        let x = -1.7 + column / (width - 1) * 3.4, y = -1.3 + row / (height - 1) * 2.6, iteration = 0;
+        for (; iteration < 96 && x * x + y * y <= 16; iteration++) {
+          const nextX = x * x - y * y + cx;
+          y = 2 * x * y + cy; x = nextX;
+        }
+        if (iteration > 13) points.push({x: -1.7 + column / (width - 1) * 3.4, y: -1.3 + row / (height - 1) * 2.6, z: (iteration / 96 - 0.45) * 0.8});
+      }
+      return normalizeFractal(points, nodes, 0.36);
+    }
+    function sierpinskiPositions(nodes) {
+      const random = deterministicRandom(0x51e2a1), vertices = [{x: 0, y: -1, z: -0.7}, {x: -0.94, y: 0.63, z: -0.7}, {x: 0.94, y: 0.63, z: -0.7}, {x: 0, y: 0, z: 1}];
+      const points = []; let point = {x: 0.1, y: 0.1, z: 0.1};
+      for (let index = 0; index < Math.max(8000, nodes.length * 35); index++) {
+        const target = vertices[Math.floor(random() * vertices.length)];
+        point = {x: (point.x + target.x) / 2, y: (point.y + target.y) / 2, z: (point.z + target.z) / 2};
+        if (index > 20) points.push(point);
+      }
+      return normalizeFractal(points, nodes, 0.45);
+    }
+    function hausdorffPositions(nodes) {
+      const dimensions = mode === '4d' ? 4 : (mode === '3d' ? 3 : 2), random = deterministicRandom(0xa05d0ff), points = [];
+      for (let index = 0; index < Math.max(9000, nodes.length * 42); index++) {
+        const coordinate = [];
+        for (let axis = 0; axis < dimensions; axis++) {
+          let value = 0, scale = 1 / 3;
+          for (let digit = 0; digit < 9; digit++) { value += (random() > 0.5 ? 2 : 0) * scale; scale /= 3; }
+          coordinate.push(value - 0.5);
+        }
+        points.push({x: coordinate[0], y: coordinate[1], z: coordinate[2] || 0, w: coordinate[3] || 0});
+      }
+      return normalizeFractal(points, nodes, 0.42);
+    }
+    function tesseractPositions(nodes) {
+      const vertices = Array.from({length: 16}, (_, index) => ({x: index & 1 ? 1 : -1, y: index & 2 ? 1 : -1, z: index & 4 ? 1 : -1, w: index & 8 ? 1 : -1}));
+      const points = [];
+      vertices.forEach((start, index) => {
+        for (let axis = 0; axis < 4; axis++) {
+          const other = index ^ (1 << axis);
+          if (other < index) continue;
+          const end = vertices[other];
+          for (let step = 0; step < 32; step++) {
+            const amount = step / 31;
+            points.push({x: start.x + (end.x - start.x) * amount, y: start.y + (end.y - start.y) * amount, z: start.z + (end.z - start.z) * amount, w: start.w + (end.w - start.w) * amount});
+          }
+        }
+      });
+      return normalizeFractal(points, nodes, 0.5);
+    }
+    function lifePositions(nodes) {
+      const columns = Math.ceil(Math.sqrt(nodes.length * 1.55)), spacing = Math.max(58, Math.min(86, 1250 / columns));
+      const points = nodes.map((_, index) => ({x: (index % columns) * spacing, y: Math.floor(index / columns) * spacing}));
+      const positions = normalizeFractal(points, nodes, 0.18);
+      return {positions, columns};
+    }
+    function initializeLife(nodes, columns) {
+      lifeColumns = columns;
+      lifeGeneration = 0;
+      lifeOrder = nodes.map(node => node.id);
+      lifeState = new Map(lifeOrder.map((id, index) => [id, (index * index * 11 + index * 37 + 17) % 13 < 5]));
+    }
+    function evolveLife() {
+      const rows = Math.ceil(lifeOrder.length / lifeColumns), next = new Map();
+      const aliveAt = (row, column) => {
+        const index = ((row + rows) % rows) * lifeColumns + ((column + lifeColumns) % lifeColumns);
+        return index < lifeOrder.length && lifeState.get(lifeOrder[index]) ? 1 : 0;
+      };
+      lifeOrder.forEach((id, index) => {
+        const row = Math.floor(index / lifeColumns), column = index % lifeColumns;
+        let neighbors = 0;
+        for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) if (x || y) neighbors += aliveAt(row + y, column + x);
+        next.set(id, neighbors === 3 || (Boolean(lifeState.get(id)) && neighbors === 2));
+      });
+      lifeState = next;
+      lifeGeneration++;
+      if ([...lifeState.values()].filter(Boolean).length < Math.max(5, lifeOrder.length * 0.03)) initializeLife(lifeOrder.map(id => ({id})), lifeColumns);
+    }
+    function greenNodeColor(index, alive = true, alpha = 1) {
+      const bright = 118 + (index * 47) % 138;
+      return alive ? (alpha === 1 ? `rgb(20,${bright},62)` : `rgba(20,${bright},62,${alpha})`) : '#03150a';
+    }
+    function fractalGlyph(index, alive = true, life = false) {
+      const glyphs = life ? (alive ? ['▓', '+', 'o'] : ['·', '.', '-']) : ['◇', '+', 'o', '.', '-'];
+      return glyphs[index % glyphs.length];
+    }
+    function isFractalGlyph(value) { return ['▓', '+', 'o', '·', '.', '-', '◇'].includes(value); }
+    function fractalTitle() {
+      return ({
+        buddhabrot: 'BUDDHABROT · ESCAPING ORBIT DENSITY',
+        dragon: 'HEIGHWAY DRAGON · 90° RECURSION',
+        julia: 'JULIA SET · z² + (−0.835 − 0.2321i)',
+        sierpinski: 'SIERPIŃSKI · TETRAHEDRAL CHAOS GAME',
+        hausdorff: `CANTOR DUST · HAUSDORFF d=${((mode === '4d' ? 4 : (mode === '3d' ? 3 : 2)) * Math.log(2) / Math.log(3)).toFixed(3)}`,
+        tesseract: 'TESSERACT · ROTATING 4D PROJECTION',
+        life: 'CONWAY LIFE · ASCII VOXEL FIELD'
+      })[fractalMode] || '';
+    }
+    function addFractalBadge(graphElement) {
+      if (!fractalMode) return;
+      const badge = document.createElement('div');
+      badge.textContent = fractalTitle();
+      badge.style.cssText = 'position:absolute;left:24px;bottom:22px;z-index:5;padding:8px 12px;border:1px solid #35ff7290;background:#020905cc;color:#9dffac;box-shadow:0 0 18px #35ff7255;font:700 11px monospace;letter-spacing:.12em;pointer-events:none';
+      graphElement.appendChild(badge);
+    }
+    function drawFractalHalo(context) {
+      if (!fractalMode || !fractalGuidePoints.length || fractalMode === 'life') return;
+      context.save(); context.globalCompositeOperation = 'lighter'; context.shadowColor = '#35ff72'; context.shadowBlur = 12;
+      if (fractalMode === 'dragon') {
+        context.strokeStyle = '#77ff9acc'; context.lineWidth = 2.2; context.beginPath();
+        fractalGuidePoints.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke();
+      } else if (fractalMode === 'tesseract') {
+        context.strokeStyle = '#77ff9acc'; context.lineWidth = 2; context.beginPath();
+        fractalGuidePoints.forEach((point, index) => { if (index % 32 === 0) context.moveTo(point.x, point.y); else context.lineTo(point.x, point.y); }); context.stroke();
+      } else {
+        context.fillStyle = '#65ff8870';
+        fractalGuidePoints.forEach((point, index) => { if (index % 2 === 0) context.fillRect(point.x - 1.2, point.y - 1.2, 2.4, 2.4); });
+      }
+      context.restore();
+    }
+    function addThreeDimensionalHalo(graph) {
+      if (!fractalMode || !fractalGuidePoints.length || fractalMode === 'life' || mode === '4d') return;
+      if (fractalMode === 'dragon' || fractalMode === 'tesseract') {
+        const points = [];
+        if (fractalMode === 'dragon') fractalGuidePoints.forEach(point => points.push(new THREE.Vector3(point.x, point.y, point.z)));
+        else for (let index = 0; index < fractalGuidePoints.length; index++) {
+          if (index % 32 === 0) continue;
+          const previous = fractalGuidePoints[index - 1], point = fractalGuidePoints[index];
+          points.push(new THREE.Vector3(previous.x, previous.y, previous.z), new THREE.Vector3(point.x, point.y, point.z));
+        }
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({color: 0x65ff88, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, depthWrite: false});
+        graph.scene().add(fractalMode === 'dragon' ? new THREE.Line(geometry, material) : new THREE.LineSegments(geometry, material));
+      } else {
+        const geometry = new THREE.BufferGeometry().setFromPoints(fractalGuidePoints.map(point => new THREE.Vector3(point.x, point.y, point.z)));
+        graph.scene().add(new THREE.Points(geometry, new THREE.PointsMaterial({color: 0x65ff88, size: 3.2, transparent: true, opacity: 0.58, blending: THREE.AdditiveBlending, depthWrite: false})));
+      }
+    }
+    function startLifeAnimation(generation) {
+      clearTimeout(lifeTimer);
+      const tick = () => {
+        if (generation !== graphGeneration || !['life', 'cinema'].includes(document.querySelector('#viewFilter').value) || fractalMode !== 'life') return;
+        evolveLife();
+        if (mode === '2d' && twoDimensionalNodes) {
+          twoDimensionalNodes.update(lifeOrder.map((id, index) => {
+            const alive = Boolean(lifeState.get(id)), selected = id === focusedNode || id === tourFocusNode;
+            const glyph = fractalGlyph(index, alive, true), existing = twoDimensionalNodes.get(id);
+            return {id, asciiGlyph: glyph, label: isFractalGlyph(existing.label) ? glyph : existing.label, color: {background: selected ? '#ff2020' : greenNodeColor(index, alive, 0.3), border: selected ? '#ffd0d0' : (alive ? '#9dffac' : '#174826'), highlight: {background: '#ff2020', border: '#ffd0d0'}}, shadow: selected ? {enabled: true, color: '#ff2020', size: 42} : (alive ? {enabled: true, color: '#35ff72', size: 16} : false), font: {color: alive ? '#aaffbd' : '#356743', size: 11, strokeWidth: 3, strokeColor: '#020905'}};
+          }));
+        } else if (mode === '3d' && renderer) {
+          renderer.graphData().nodes.forEach(node => {
+            node.lifeAlive = Boolean(lifeState.get(node.id));
+            const glyph = glyphByNode.get(node.id);
+            if (glyph) { glyph.material.map = voxelGlyphTexture(fractalGlyph(node.fractalIndex || 0, node.lifeAlive, true)); glyph.material.opacity = node.lifeAlive ? 0.82 : 0.12; glyph.material.needsUpdate = true; }
+          });
+          renderer.nodeColor(threeNodeColor);
+        }
+        status(`Conway Life · generation ${lifeGeneration} · ${[...lifeState.values()].filter(Boolean).length} active cells`);
+        lifeTimer = setTimeout(tick, 620);
+      };
+      lifeTimer = setTimeout(tick, 620);
+    }
+    function connectedTour(nodes, edges, degree) {
+      const byId = new Map(nodes.map(node => [node.id, node]));
+      const adjacent = new Map(nodes.map(node => [node.id, []]));
+      edges.forEach(edge => {
+        adjacent.get(edge.source)?.push(edge.target);
+        adjacent.get(edge.target)?.push(edge.source);
+      });
+      const remaining = new Set(byId.keys()), ordered = [];
+      while (remaining.size) {
+        const start = [...remaining].sort((a, b) => (degree.get(b) || 0) - (degree.get(a) || 0))[0];
+        const queue = [start]; remaining.delete(start);
+        while (queue.length) {
+          const id = queue.shift(); ordered.push(byId.get(id));
+          const next = (adjacent.get(id) || []).filter(item => remaining.has(item))
+            .sort((a, b) => (degree.get(b) || 0) - (degree.get(a) || 0));
+          next.forEach(item => { remaining.delete(item); queue.push(item); });
+        }
+      }
+      return ordered;
+    }
+    function draw() {
+      pauseTour(true);
+      tourFocusNode = null;
+      hudByNode.clear();
+      glowByNode.clear();
+      tileByNode.clear();
+      glyphByNode.clear();
+      fractalGuidePoints = [];
+      fourDimensionalHalo = null;
+      fourDimensionalHaloSource = [];
+      cancelAnimationFrame(graphFrame);
+      cancelAnimationFrame(fourDimensionalFrame);
+      clearTimeout(fractalTimer);
+      clearTimeout(lifeTimer);
+      const generation = ++graphGeneration;
+      clearTimeout(stabilizationTimer);
+      const selectedType = typeFilter.value;
+      let nodes = current.nodes;
+      if (selectedType) {
+        const visible = new Set(nodes.filter(node => node.type === selectedType).map(node => node.id));
+        current.edges.forEach(edge => {
+          if (visible.has(edge.source)) visible.add(edge.target);
+          if (visible.has(edge.target)) visible.add(edge.source);
+        });
+        nodes = nodes.filter(node => visible.has(node.id));
+      }
+      let nodeIds = new Set(nodes.map(n => n.id));
+      let edges = current.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+      const selectedView = document.querySelector('#viewFilter').value;
+      const degree = new Map(nodes.map(node => [node.id, 0]));
+      edges.forEach(edge => {
+        degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+        degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+      });
+      if (document.querySelector('#hideReferences').checked) {
+        nodes = nodes.filter(node => node.type !== 'document' || (degree.get(node.id) || 0) > 2);
+        nodeIds = new Set(nodes.map(node => node.id));
+        edges = edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+      }
+      if (selectedView === 'focus' && nodes.length) {
+        if (!focusedNode || !nodeIds.has(focusedNode)) {
+          focusedNode = nodes.reduce((best, node) => (degree.get(node.id) || 0) > (degree.get(best.id) || 0) ? node : best).id;
+        }
+        const visible = new Set([focusedNode]);
+        for (let hop = 0; hop < 2; hop++) {
+          const frontier = new Set(visible);
+          edges.forEach(edge => {
+            if (frontier.has(edge.source)) visible.add(edge.target);
+            if (frontier.has(edge.target)) visible.add(edge.source);
+          });
+        }
+        nodes = nodes.filter(node => visible.has(node.id));
+        nodeIds = new Set(nodes.map(node => node.id));
+        edges = edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+      }
+      if (!showUnlinked) {
+        const linked = new Set();
+        edges.forEach(e => { linked.add(e.source); linked.add(e.target); });
+        nodes = nodes.filter(n => linked.has(n.id));
+      }
+      tourSequence = connectedTour(nodes, edges, degree);
+      tourIndex = 0;
+      const cinemaModes = ['buddhabrot', 'dragon', 'julia', 'sierpinski', 'hausdorff', 'tesseract', 'life'];
+      fractalMode = selectedView === 'cinema' ? cinemaModes[cinemaPhase % cinemaModes.length] : (cinemaModes.includes(selectedView) ? selectedView : '');
+      let fractalPositions = new Map(), lifeLayout;
+      if (fractalMode === 'buddhabrot') fractalPositions = buddhabrotPositions(tourSequence);
+      if (fractalMode === 'dragon') fractalPositions = dragonPositions(tourSequence);
+      if (fractalMode === 'julia') fractalPositions = juliaPositions(tourSequence);
+      if (fractalMode === 'sierpinski') fractalPositions = sierpinskiPositions(tourSequence);
+      if (fractalMode === 'hausdorff') fractalPositions = hausdorffPositions(tourSequence);
+      if (fractalMode === 'tesseract') fractalPositions = tesseractPositions(tourSequence);
+      if (fractalMode === 'life') {
+        lifeLayout = lifePositions(tourSequence);
+        fractalPositions = lifeLayout.positions;
+        if (tourSequence.length) initializeLife(tourSequence, lifeLayout.columns);
+      }
+      const flatPositions = fractalPositions;
+      const graphEl = document.querySelector('#graph');
+      graphEl.replaceChildren();
+      graphEl.style.background = fractalMode ? 'radial-gradient(circle at 50% 50%, #073015 0%, #010804 72%)' : '';
+      if (mode === '2d') {
+        if (typeof vis === 'undefined') {
+          graphEl.innerHTML = '<div style="color:#ff6b6b;padding:40px;text-align:center">2D library failed to load. Check your connection or switch to 3D.</div>';
+          return;
+        }
+        try {
+          const visNodes = new vis.DataSet(nodes.map((node, index) => {
+            const point = flatPositions.get(node.id);
+            const pictured = Number(node.visual_count || 0) > 0;
+            const alive = fractalMode !== 'life' || Boolean(lifeState.get(node.id));
+            const color = fractalMode ? greenNodeColor(index, alive, 0.3) : (node.type === 'category' ? '#64748b' : (ontologyTypes[node.type]?.color || '#5b8cff'));
+            const border = fractalMode ? (alive ? '#9dffac' : '#174826') : (pictured ? '#ffd166' : '#d9e7ff');
+            const shadow = node.id === focusedNode ? {enabled: true, color: '#ff2020', size: 42, x: 0, y: 0} : (fractalMode && alive ? {enabled: true, color: '#35ff72', size: 14, x: 0, y: 0} : (pictured ? {enabled: true, color: '#ff9f1c', size: 18, x: 0, y: 0} : false));
+            const graphLabel = `${pictured ? '✦ ' : ''}${node.name}`;
+            return {...node, ...(point ? {x: point.x, y: point.y} : {}), graphLabel, degree: degree.get(node.id) || 0,
+              asciiGlyph: fractalMode ? fractalGlyph(index, alive, fractalMode === 'life') : '',
+              label: fractalMode ? fractalGlyph(index, alive, fractalMode === 'life') : (pictured || node.type === 'category' || (degree.get(node.id) || 0) >= 8 ? graphLabel : ''), shape: fractalMode ? 'square' : 'dot',
+              size: 13 + Math.min(18, (degree.get(node.id) || 0) * 1.4) + (pictured ? 5 : 0),
+              color: {background: color, border, highlight: {background: '#ff2020', border: '#ffd0d0'}},
+              font: fractalMode ? {color: alive ? '#aaffbd' : '#356743', size: 11, strokeWidth: 3, strokeColor: '#020905', drawThreshold: 6, maxVisible: 20} : {drawThreshold: 6, maxVisible: 22},
+              borderWidth: pictured ? 4 : 1, shadow};
+          }));
+          const visEdges = new vis.DataSet(edges.map((edge, index) => ({...edge, id: `edge-${index}`, from: edge.source, to: edge.target,
+            graphLabel: edge.type, label: '', width: fractalMode === 'life' ? 0.08 : 0.18, dashes: [8, 6, 2, 6], color: {color: fractalMode === 'life' ? '#1fcf5812' : (fractalMode ? '#1fcf5842' : '#40547a66'), highlight: '#ff3030'}, arrows: {to: {enabled: true, scaleFactor: 0.25}},
+            font: {color: fractalMode ? '#54a96c' : '#8fa2c4', size: 8, strokeWidth: 0, align: 'middle'}, smooth: {enabled: true, type: 'dynamic', roundness: 0.15}})));
+          twoDimensionalNodes = visNodes;
+          renderer = new vis.Network(graphEl, {nodes: visNodes, edges: visEdges}, {
+            autoResize: true,
+            physics: flatPositions.size ? false : {enabled: true, solver: 'forceAtlas2Based', stabilization: {enabled: true, iterations: 700, updateInterval: 20, fit: true},
+              forceAtlas2Based: {gravitationalConstant: -72, centralGravity: 0.008, springLength: 150, springConstant: 0.035, damping: 0.45, avoidOverlap: 0.9}, minVelocity: 0.4},
+            interaction: {hover: true, tooltipDelay: 120, navigationButtons: true, keyboard: true},
+            nodes: {shape: 'dot', font: {color: '#e8eefc', size: 11, strokeWidth: 3, strokeColor: '#070b16'}},
+            layout: {improvedLayout: false, randomSeed: 17}
+          });
+          renderer.on('click', params => {
+            if (params.nodes.length) selectGraphNode(visNodes.get(params.nodes[0]));
+            else if (params.edges.length) showDetails(visEdges.get(params.edges[0]));
+          });
+          renderer.on('hoverNode', params => showVisualTooltip(visNodes.get(params.node), params.pointer.DOM.x, params.pointer.DOM.y));
+          renderer.on('blurNode', hideTooltip);
+          renderer.on('dragEnd', params => { if (params.nodes.length && !flatPositions.size) renderer.startSimulation(); });
+          let labelScale = -1;
+          const refreshLabels = () => {
+            const scale = renderer.getScale(), level = scale >= 0.82 ? 2 : (scale >= 0.48 ? 1 : 0);
+            if (level === labelScale) return;
+            labelScale = level;
+            visNodes.update(visNodes.get().map(node => ({id: node.id, label: level === 2 || (level === 1 && ((node.degree || 0) >= 3 || Number(node.visual_count || 0))) || (!fractalMode && node.type === 'category') ? node.graphLabel : node.asciiGlyph})));
+            visEdges.update(visEdges.get().map(edge => ({id: edge.id, label: level === 2 ? edge.graphLabel : ''})));
+          };
+          renderer.on('zoom', refreshLabels);
+          setTimeout(() => { if (flatPositions.size) renderer.fit({animation: {duration: 650, easingFunction: 'easeInOutQuad'}}); refreshLabels(); }, 80);
+          load2dThumbnails(visNodes, nodes);
+          const animatedEdges = fractalMode === 'life' ? [] : visEdges.get().filter((_, index) => index % Math.max(1, Math.ceil(edges.length / 90)) === 0);
+          renderer.on('afterDrawing', context => {
+            const phase = performance.now() * 0.00018;
+            context.save();
+            drawFractalHalo(context);
+            context.globalCompositeOperation = 'lighter';
+            for (let index = 0; index < animatedEdges.length; index++) {
+              const edge = animatedEdges[index];
+              const points = renderer.getPositions([edge.from, edge.to]);
+              if (!points[edge.from] || !points[edge.to]) continue;
+              const progress = (phase + index * 0.173) % 1;
+              const x = points[edge.from].x + (points[edge.to].x - points[edge.from].x) * progress;
+              const y = points[edge.from].y + (points[edge.to].y - points[edge.from].y) * progress;
+              const glow = context.createRadialGradient(x, y, 0, x, y, 7);
+              glow.addColorStop(0, fractalMode ? '#d8ffe0' : '#ffffff'); glow.addColorStop(0.25, fractalMode ? '#35ff72cc' : '#6df7ffcc'); glow.addColorStop(1, fractalMode ? '#003d1200' : '#3157d500');
+              context.fillStyle = glow; context.beginPath(); context.arc(x, y, 7, 0, Math.PI * 2); context.fill();
+            }
+            context.restore();
+          });
+          let previousFrame = 0;
+          const animateKnowledgeMap = time => {
+            if (generation !== graphGeneration || mode !== '2d') return;
+            if (time - previousFrame > 40) { renderer.redraw(); previousFrame = time; }
+            graphFrame = requestAnimationFrame(animateKnowledgeMap);
+          };
+          graphFrame = requestAnimationFrame(animateKnowledgeMap);
+          addFractalBadge(graphEl);
+        } catch (err) {
+          graphEl.innerHTML = `<div style="color:#ff6b6b;padding:40px;text-align:center">2D render error: ${err.message}. <button onclick="setMode('3d')" style="background:#5b8cff;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer">Switch to 3D</button></div>`;
+        }
+      } else {
+        renderer = ForceGraph3D()(graphEl).backgroundColor('#070b16').graphData({
+          nodes: nodes.map((n, index) => ({
+            ...n,
+            id: n.id,
+            degree: degree.get(n.id) || 0,
+            fractalIndex: index,
+            lifeAlive: fractalMode !== 'life' || Boolean(lifeState.get(n.id)),
+            x: fractalPositions.get(n.id)?.x ?? (Math.random() - 0.5) * 700,
+            y: fractalPositions.get(n.id)?.y ?? (Math.random() - 0.5) * 700,
+            z: fractalPositions.get(n.id)?.z ?? (Math.random() - 0.5) * 700,
+            fourDimensional: fractalPositions.get(n.id),
+            ...(fractalPositions.size && mode !== '4d' ? {
+              fx: fractalPositions.get(n.id).x,
+              fy: fractalPositions.get(n.id).y,
+              fz: fractalPositions.get(n.id).z
+            } : {})
+          })),
+          links: edges.map(e => ({source: e.source, target: e.target, label: e.type}))
+        }).nodeLabel(n => `${Number(n.visual_count || 0) ? `📷 ${n.visual_count} · ` : ''}${n.name} (${n.type})`).nodeColor(threeNodeColor)
+          .nodeThreeObject(node => createTargetHud(node)).nodeThreeObjectExtend(true)
+          .nodeVal(n => 2 + edges.filter(e => e.source === n.id || e.target === n.id).length + Math.min(10, Number(n.visual_count || 0) * 1.5))
+          .nodeRelSize(4).linkOpacity(threeLinkOpacity)
+          .linkColor(threeLinkColor).linkWidth(threeLinkWidth)
+          .linkDirectionalArrowLength(2).linkDirectionalParticles(1).linkDirectionalParticleWidth(0.7).linkDirectionalParticleSpeed(0.004)
+          .d3AlphaDecay(0.018).d3VelocityDecay(0.28).cooldownTicks(320)
+          .onNodeClick(n => selectGraphNode(n))
+          .onNodeDragEnd(n => {
+            if (!fractalPositions.size) { n.fx = undefined; n.fy = undefined; n.fz = undefined; }
+            renderer.d3ReheatSimulation();
+          })
+          .onLinkClick(link => showDetails(link));
+        renderer.d3Force('charge').strength(-180);
+        renderer.d3Force('link').distance(110);
+        addThreeDimensionalHalo(renderer);
+        addFractalBadge(graphEl);
+        requestAnimationFrame(refreshThreeTargetEffects);
+        if (mode === '4d' && fractalPositions.size) startFourDimensionalProjection(generation);
+        if (fractalPositions.size) setTimeout(() => renderer?.zoomToFit(900, 70), 120);
+      }
+      const filtered = current.nodes.length - nodes.length;
+      const hausdorffDimension = fractalMode === 'hausdorff' ? `${(mode === '4d' ? 4 : (mode === '3d' ? 3 : 2)) * Math.log(2) / Math.log(3)}`.slice(0, 5) : '';
+      status(`${fractalMode ? `${fractalMode.toUpperCase()} · ` : ''}${hausdorffDimension ? `dimension ${hausdorffDimension} · ` : ''}${mode.toUpperCase()} projection · ${nodes.length} nodes, ${edges.length} relationships${filtered ? ` (${filtered} unlinked hidden)` : ''}`);
+      if (fractalMode === 'life' && tourSequence.length) startLifeAnimation(generation);
+      if (selectedView === 'cinema') {
+        fractalTimer = setTimeout(() => { cinemaPhase = (cinemaPhase + 1) % cinemaModes.length; draw(); }, 7000);
+      }
+    }
+    function linkEndpointId(endpoint) {
+      return typeof endpoint === 'object' ? endpoint.id : endpoint;
+    }
+    function startFourDimensionalProjection(generation) {
+      fourDimensionalHaloSource = fractalMode === 'tesseract' ? fractalGuidePoints.flatMap((point, index) => index % 32 ? [fractalGuidePoints[index - 1], point] : []) : [...fractalGuidePoints];
+      if (fourDimensionalHaloSource.length) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(fourDimensionalHaloSource.length * 3), 3));
+        const material = fractalMode === 'tesseract'
+          ? new THREE.LineBasicMaterial({color: 0x65ff88, transparent: true, opacity: 0.78, blending: THREE.AdditiveBlending, depthWrite: false})
+          : new THREE.PointsMaterial({color: 0x65ff88, size: 3.2, transparent: true, opacity: 0.58, blending: THREE.AdditiveBlending, depthWrite: false});
+        fourDimensionalHalo = fractalMode === 'tesseract' ? new THREE.LineSegments(geometry, material) : new THREE.Points(geometry, material);
+        renderer.scene().add(fourDimensionalHalo);
+      }
+      const animate = time => {
+        if (generation !== graphGeneration || mode !== '4d' || !renderer) return;
+        const angle = time * 0.00018, cosine = Math.cos(angle), sine = Math.sin(angle), cosine2 = Math.cos(angle * 0.73), sine2 = Math.sin(angle * 0.73);
+        const project = point => {
+          const x = point.x * cosine - point.w * sine, w = point.x * sine + point.w * cosine;
+          const y = point.y * cosine2 - point.z * sine2, z = point.y * sine2 + point.z * cosine2;
+          const perspective = 1 / Math.max(0.42, 1 + w / 2300);
+          return {x: x * perspective, y: y * perspective, z: z * perspective};
+        };
+        renderer.graphData().nodes.forEach(node => {
+          if (!node.fourDimensional) return;
+          const point = project(node.fourDimensional);
+          node.x = node.fx = point.x; node.y = node.fy = point.y; node.z = node.fz = point.z;
+        });
+        if (fourDimensionalHalo) {
+          const positions = fourDimensionalHalo.geometry.attributes.position;
+          fourDimensionalHaloSource.forEach((source, index) => { const point = project(source); positions.setXYZ(index, point.x, point.y, point.z); });
+          positions.needsUpdate = true;
+        }
+        renderer.refresh();
+        fourDimensionalFrame = requestAnimationFrame(animate);
+      };
+      fourDimensionalFrame = requestAnimationFrame(animate);
+    }
+    function createTargetHud(node) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640; canvas.height = 150;
+      const context = canvas.getContext('2d');
+      drawTargetHud(context, node);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map: texture, transparent: true, depthWrite: false}));
+      sprite.scale.set(80, 19, 1); sprite.position.set(0, 22, 0); sprite.visible = false;
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({map: activeGlowTexture(), color: 0xff2020, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending}));
+      glow.scale.set(42, 42, 1);
+      const tileMaterial = new THREE.MeshBasicMaterial({color: fractalMode ? 0x35ff72 : 0x6df7ff, transparent: true, opacity: 0.07, depthWrite: false});
+      const tile = new THREE.Mesh(new THREE.BoxGeometry(16, 16, 16), tileMaterial);
+      const frame = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({color: fractalMode ? 0x35ff72 : 0x6df7ff, transparent: true, opacity: 0.42}));
+      const glyph = fractalMode ? new THREE.Sprite(new THREE.SpriteMaterial({map: voxelGlyphTexture(fractalGlyph(node.fractalIndex || 0, node.lifeAlive !== false, fractalMode === 'life')), color: 0x35ff72, transparent: true, opacity: node.lifeAlive === false ? 0.16 : 0.82, depthWrite: false, blending: THREE.AdditiveBlending})) : null;
+      if (glyph) glyph.scale.set(11, 11, 1);
+      const group = new THREE.Group();
+      group.add(tile); group.add(frame); if (glyph) group.add(glyph); group.add(glow); group.add(sprite);
+      glowByNode.set(node.id, glow);
+      tileByNode.set(node.id, {tile, frame});
+      if (glyph) glyphByNode.set(node.id, glyph);
+      hudByNode.set(node.id, {canvas, context, texture, node, sprite});
+      return group;
+    }
+    function voxelGlyphTexture(character) {
+      if (voxelTextures.has(character)) return voxelTextures.get(character);
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 64;
+      const context = canvas.getContext('2d'); context.fillStyle = '#fff'; context.shadowColor = '#35ff72'; context.shadowBlur = 12; context.font = '700 46px monospace'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(character, 32, 34);
+      const texture = new THREE.CanvasTexture(canvas); texture.minFilter = THREE.LinearFilter; voxelTextures.set(character, texture); return texture;
+    }
+    function activeGlowTexture() {
+      if (redGlowTexture) return redGlowTexture;
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
+      const context = canvas.getContext('2d'), gradient = context.createRadialGradient(64, 64, 2, 64, 64, 62);
+      gradient.addColorStop(0, '#ffffff'); gradient.addColorStop(0.12, '#ff3030'); gradient.addColorStop(0.45, '#ff101088'); gradient.addColorStop(1, '#ff000000');
+      context.fillStyle = gradient; context.fillRect(0, 0, 128, 128);
+      redGlowTexture = new THREE.CanvasTexture(canvas);
+      return redGlowTexture;
+    }
+    function drawTargetHud(context, node, image = null) {
+      const {canvas} = context;
+      const pictured = Number(node.visual_count || 0) > 0;
+      const accent = node.id === tourFocusNode || node.id === focusedNode ? '#ff2020' : (fractalMode ? '#35ff72' : (pictured ? '#ffbf00' : '#6df7ff'));
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = accent; context.lineWidth = 5;
+      context.beginPath();
+      context.moveTo(8, 42); context.lineTo(8, 8); context.lineTo(54, 8);
+      context.moveTo(586, 8); context.lineTo(632, 8); context.lineTo(632, 42);
+      context.moveTo(8, 108); context.lineTo(8, 142); context.lineTo(54, 142);
+      context.moveTo(586, 142); context.lineTo(632, 142); context.lineTo(632, 108);
+      context.stroke();
+      context.shadowColor = accent; context.shadowBlur = 18;
+      context.fillStyle = accent; context.font = '700 30px system-ui';
+      context.fillText(`${pictured ? `IMG ${node.visual_count} · ` : ''}${node.name}`.slice(0, image ? 26 : 38), 28, 65);
+      context.shadowBlur = 0; context.fillStyle = '#d9fbff'; context.font = '22px monospace';
+      context.fillText(`${node.type} · LINKS ${node.degree || 0}`.toUpperCase(), 28, 105);
+      if (image) {
+        context.save();
+        context.beginPath(); context.roundRect(470, 18, 140, 114, 8); context.clip();
+        const ratio = Math.max(140 / image.width, 114 / image.height);
+        const width = image.width * ratio, height = image.height * ratio;
+        context.drawImage(image, 470 + (140 - width) / 2, 18 + (114 - height) / 2, width, height);
+        context.restore();
+        context.strokeStyle = accent; context.lineWidth = 3; context.strokeRect(470, 18, 140, 114);
+      }
+    }
+    async function loadHudThumbnail(node) {
+      const hud = hudByNode.get(node.id);
+      if (!hud || hud.loading || hud.loaded || !Number(node.visual_count || 0)) return;
+      hud.loading = true;
+      try {
+        const auth = token() ? {Authorization: `Bearer ${token()}`} : {};
+        const response = await fetch(`/v1/knowledge/entity/${encodeURIComponent(node.name)}/visuals?ontology=${encodeURIComponent(ontology.value)}`, {headers: auth});
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!data.visuals?.length) return;
+        const image = new Image();
+        image.src = await authenticatedImageUrl(data.visuals[0].image_url);
+        await image.decode();
+        drawTargetHud(hud.context, node, image);
+        hud.texture.needsUpdate = true;
+        hud.image = image;
+        hud.loaded = true;
+      } catch (error) { /* details panel reports preview failures */ }
+      finally { hud.loading = false; }
+    }
+    function tourTouches(link) {
+      return linkEndpointId(link.source) === tourFocusNode || linkEndpointId(link.target) === tourFocusNode;
+    }
+    function threeNodeColor(node) {
+      if (node.id === tourFocusNode || node.id === focusedNode) return '#ff2020';
+      if (tourFocusNode) return '#17213a';
+      if (fractalMode) return greenNodeColor(node.fractalIndex || 0, fractalMode !== 'life' || node.lifeAlive);
+      if (Number(node.visual_count || 0)) return '#ffb703';
+      return node.type === 'category' ? '#64748b' : (ontologyTypes[node.type]?.color || '#5b8cff');
+    }
+    function threeLinkOpacity(link) { return tourFocusNode ? (tourTouches(link) ? 0.95 : 0.04) : (fractalMode === 'life' ? 0.025 : (fractalMode ? 0.14 : 0.28)); }
+    function threeLinkColor(link) { return tourFocusNode && tourTouches(link) ? '#ff3030' : (fractalMode ? '#35ff72' : '#5b8cff'); }
+    function threeLinkWidth(link) { return tourFocusNode && tourTouches(link) ? 0.9 : 0.2; }
+    function startTour() {
+      if (!tourSequence.length || !renderer) { status('Load a graph before starting the movie.'); return; }
+      clearTimeout(tourTimer);
+      if (tourIndex >= tourSequence.length) tourIndex = 0;
+      advanceTour();
+    }
+    function pauseTour(silent = false) {
+      clearTimeout(tourTimer);
+      tourTimer = null;
+      if (!silent && tourFocusNode) status(`Graph movie paused at ${tourIndex} of ${tourSequence.length}.`);
+    }
+    function advanceTour() {
+      if (tourIndex >= tourSequence.length) {
+        status(`Graph movie complete · ${tourSequence.length} entities visited.`);
+        tourTimer = null;
+        return;
+      }
+      const item = tourSequence[tourIndex++];
+      const previousTourNode = tourFocusNode;
+      tourFocusNode = item.id;
+      if (mode === '2d') {
+        if (previousTourNode) {
+          const previous = twoDimensionalNodes.get(previousTourNode);
+          if (previous) twoDimensionalNodes.update({id: previousTourNode, shadow: Number(previous.visual_count || 0) ? {enabled: true, color: '#ff9f1c', size: 18, x: 0, y: 0} : false});
+        }
+        twoDimensionalNodes.update({id: item.id, shadow: {enabled: true, color: '#ff2020', size: 42, x: 0, y: 0}});
+        const connectedNodes = renderer.getConnectedNodes(item.id);
+        const connectedEdges = renderer.getConnectedEdges(item.id);
+        renderer.setSelection({nodes: [item.id, ...connectedNodes], edges: connectedEdges}, {unselectAll: true, highlightEdges: true});
+        renderer.focus(item.id, {scale: 1.15, offset: targetDetailsOffset(), animation: {duration: 1100, easingFunction: 'easeInOutQuad'}});
+        showDetails(item);
+      } else {
+        const node = renderer.graphData().nodes.find(candidate => candidate.id === item.id);
+        if (!node) { tourTimer = setTimeout(advanceTour, 10); return; }
+        const angle = tourIndex * 2.399963;
+        const distance = 135;
+        refreshThreeTargetEffects();
+        renderer.cameraPosition({
+          x: node.x + Math.cos(angle) * distance,
+          y: node.y + Math.sin(angle) * distance,
+          z: node.z + Math.sin(angle * 0.5) * distance
+        }, node, 1200);
+        showDetails(node);
+        loadHudThumbnail(node);
+      }
+      status(`Graph movie · ${tourIndex}/${tourSequence.length} · ${item.name} (${item.type})`);
+      tourTimer = setTimeout(advanceTour, 3600);
+    }
+    function showTooltip(x, y, name, type) {
+      const tooltip = document.querySelector('#tooltip');
+      tooltip.querySelector('.label').textContent = `${name} ${type}`;
+      tooltip.querySelector('img').style.display = 'none';
+      tooltip.querySelector('.caption').textContent = 'Loading picture…';
+      tooltip.style.display = 'block';
+      tooltip.style.left = `${x + 20}px`;
+      tooltip.style.top = `${y - 60}px`;
+    }
+    function showVisualTooltip(node, x, y) {
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(async () => {
+        const bounds = document.querySelector('#graph').getBoundingClientRect();
+        showTooltip(bounds.left + x, bounds.top + y, node.name, `(${node.type})`);
+        if (!Number(node.visual_count || 0)) {
+          document.querySelector('#tooltip .caption').textContent = `${node.degree || 0} graph connections`;
+          return;
+        }
+        try {
+          const auth = token() ? {Authorization: `Bearer ${token()}`} : {};
+          const response = await fetch(`/v1/knowledge/entity/${encodeURIComponent(node.name)}/visuals?ontology=${encodeURIComponent(ontology.value)}`, {headers: auth});
+          if (!response.ok) throw new Error('Picture unavailable');
+          const data = await response.json();
+          if (!data.visuals?.length) throw new Error('Picture unavailable');
+          const visual = data.visuals[0], tooltip = document.querySelector('#tooltip');
+          tooltip.querySelector('img').src = await authenticatedImageUrl(visual.image_url);
+          tooltip.querySelector('img').style.display = 'block';
+          tooltip.querySelector('.caption').textContent = `Page ${visual.page}: ${visual.caption.slice(0, 100)}`;
+        } catch (error) { document.querySelector('#tooltip .caption').textContent = error.message; }
+      }, 180);
+    }
+    async function load2dThumbnails(dataset, nodes) {
+      const pictured = nodes.filter(node => Number(node.visual_count || 0) > 0).slice(0, 60);
+      await Promise.allSettled(pictured.map(async node => {
+        const auth = token() ? {Authorization: `Bearer ${token()}`} : {};
+        const response = await fetch(`/v1/knowledge/entity/${encodeURIComponent(node.name)}/visuals?ontology=${encodeURIComponent(ontology.value)}`, {headers: auth});
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!data.visuals?.length) return;
+        dataset.update({
+          id: node.id,
+          shape: 'circularImage',
+          image: await authenticatedImageUrl(data.visuals[0].image_url),
+          shapeProperties: {useBorderWithImage: true, interpolation: true}
+        });
+      }));
+    }
+    function hideTooltip() {
+      clearTimeout(hoverTimer);
+      document.querySelector('#tooltip').style.display = 'none';
+    }
+    let hoverTimer = null;
+    function targetDetailsOffset() {
+      return document.querySelector('#showTargetDetails').checked ? {x: -190, y: 0} : {x: 0, y: 0};
+    }
+    function toggleTargetDetails() {
+      const visible = document.querySelector('#showTargetDetails').checked;
+      details.style.display = visible && focusedNode ? 'block' : 'none';
+      if (visible && focusedNode) {
+        const selected = current.nodes.find(node => node.id === focusedNode);
+        if (selected) showDetails(selected);
+      }
+    }
+    function selectGraphNode(value) {
+      const previous = focusedNode;
+      focusedNode = value.id;
+      if (mode === '2d' && twoDimensionalNodes) {
+        if (previous && previous !== focusedNode) {
+          const old = twoDimensionalNodes.get(previous);
+          if (old) twoDimensionalNodes.update({id: previous, shadow: Number(old.visual_count || 0) ? {enabled: true, color: '#ff9f1c', size: 18, x: 0, y: 0} : false});
+        }
+        twoDimensionalNodes.update({id: focusedNode, shadow: {enabled: true, color: '#ff2020', size: 42, x: 0, y: 0}});
+      }
+      refreshThreeTargetEffects();
+      showDetails(value);
+      if (document.querySelector('#viewFilter').value === 'focus') {
+        draw();
+      } else if (mode === '3d') {
+        renderer.cameraPosition({x: value.x + 100, y: value.y + 100, z: value.z + 100}, value, 800);
+        loadHudThumbnail(value);
+      } else {
+        renderer.focus(value.id, {scale: Math.max(renderer.getScale(), 1), offset: targetDetailsOffset(), animation: {duration: 700, easingFunction: 'easeInOutQuad'}});
+      }
+    }
+    function refreshThreeTargetEffects() {
+      glowByNode.forEach((glow, id) => { glow.material.opacity = id === focusedNode || id === tourFocusNode ? 0.92 : 0; });
+      hudByNode.forEach(hud => {
+        const active = hud.node.id === focusedNode || hud.node.id === tourFocusNode;
+        hud.sprite.visible = active;
+        drawTargetHud(hud.context, hud.node, hud.image || null);
+        hud.texture.needsUpdate = true;
+      });
+      tileByNode.forEach(({tile, frame}, id) => {
+        const active = id === focusedNode || id === tourFocusNode;
+        tile.material.color.set(active ? 0xff2020 : (fractalMode ? 0x35ff72 : 0x6df7ff));
+        tile.material.opacity = active ? 0.2 : 0.07;
+        frame.material.color.set(active ? 0xff5050 : (fractalMode ? 0x35ff72 : 0x6df7ff));
+        frame.material.opacity = active ? 0.95 : 0.42;
+      });
+      glyphByNode.forEach((glyph, id) => {
+        const node = hudByNode.get(id)?.node, active = id === focusedNode || id === tourFocusNode;
+        glyph.material.color.set(active ? 0xff3030 : 0x35ff72);
+        glyph.material.opacity = active ? 1 : (fractalMode === 'life' && node?.lifeAlive === false ? 0.12 : 0.82);
+      });
+      if (mode === '3d' && renderer) renderer.nodeColor(threeNodeColor).linkColor(threeLinkColor).linkWidth(threeLinkWidth).linkOpacity(threeLinkOpacity);
+    }
+    async function authenticatedImageUrl(url) {
+      if (imageUrls.has(url)) return imageUrls.get(url);
+      const response = await fetch(url, {headers: token() ? {Authorization: `Bearer ${token()}`} : {}});
+      if (!response.ok) throw new Error((await responseBody(response)).detail || 'Image preview failed');
+      const objectUrl = URL.createObjectURL(await response.blob());
+      imageUrls.set(url, objectUrl);
+      return objectUrl;
+    }
+    function descriptiveData(value) {
+      const visualOnly = new Set(['x', 'y', 'z', 'vx', 'vy', 'vz', 'fx', 'fy', 'fz', 'index', 'color', 'label', 'size', 'borderWidth', 'shadow', 'shape', 'image', 'shapeProperties']);
+      return Object.fromEntries(Object.entries(value).filter(([key]) => !visualOnly.has(key)).map(([key, item]) => [
+        key,
+        item && typeof item === 'object' && ('id' in item || 'name' in item)
+          ? {id: item.id, name: item.name, type: item.type}
+          : item
+      ]));
     }
     function showDetails(value) {
-      details.textContent = JSON.stringify(value, null, 2); details.style.display = 'block';
+      const writeGeneration = ++detailsWriteGeneration;
+      if (!document.querySelector('#showTargetDetails').checked) {
+        details.style.display = 'none';
+        return;
+      }
+      if (value.source && value.target) {
+        details.innerHTML = '<div class="details-handle">LINK ANALYSIS · DRAG TO MOVE</div><pre id="linkDetails" class="hud-cursor" style="white-space:pre-wrap;color:#ffb0b0"></pre>';
+        details.style.display = 'block';
+        typeHudText(document.querySelector('#linkDetails'), JSON.stringify(descriptiveData(value), null, 2), writeGeneration);
+        return;
+      }
+      details.style.display = 'block';
+      details.innerHTML = `<div class="details-handle">TARGET LOCK · DRAG TO MOVE</div>
+        <strong style="font-size:16px;color:#ff4b4b;text-shadow:0 0 9px #ff2020">${value.name}</strong>
+        <div style="color:#9fb0d0;margin:4px 0 12px">${value.type}</div>
+        ${Number(value.visual_count || 0) ? `<div style="color:#ffd166;margin:4px 0 12px">✦ ${value.visual_count} related picture${Number(value.visual_count) === 1 ? '' : 's'}</div>` : ''}
+        <div id="entityDescription" class="hud-cursor" style="color:#ffb0b0;white-space:pre-wrap;margin-bottom:12px"></div>
+        <div class="hud-heading" style="font-weight:600;margin:10px 0 4px">Properties</div>
+        <pre id="entityMetadata" class="hud-cursor" style="white-space:pre-wrap;color:#ffb0b0;margin:0 0 12px"></pre>
+        <div class="hud-heading" style="font-weight:600;margin:10px 0 4px">Connections</div>
+        <div id="entityConnections" class="hud-cursor" style="color:#ffb0b0;margin-bottom:12px;white-space:pre-wrap"></div>
+        <div id="entityVisuals" style="color:#9fb0d0;font-size:12px">Loading pictures…</div>`;
+      const metadata = descriptiveData(value);
+      for (const key of ['id', 'name', 'type', 'description', 'degree', 'visual_count']) delete metadata[key];
+      const names = new Map(current.nodes.map(node => [node.id, node.name]));
+      const connections = current.edges.filter(edge => edge.source === value.id || edge.target === value.id).map(edge => {
+        const other = edge.source === value.id ? edge.target : edge.source;
+        return `${edge.type} → ${names.get(other) || other}${edge.evidence ? `\n  ${edge.evidence}` : ''}`;
+      });
+      typeHudText(document.querySelector('#entityDescription'), value.description || 'No description.', writeGeneration);
+      typeHudText(document.querySelector('#entityMetadata'), Object.keys(metadata).length ? JSON.stringify(metadata, null, 2) : 'No additional properties.', writeGeneration);
+      typeHudText(document.querySelector('#entityConnections'), connections.join('\n\n') || 'No visible connections.', writeGeneration);
+      loadEntityVisuals(value.name);
+    }
+    function typeHudText(element, text, generation) {
+      let offset = 0;
+      element.textContent = '';
+      const write = () => {
+        if (generation !== detailsWriteGeneration || !element.isConnected) return;
+        offset = Math.min(text.length, offset + Math.max(2, Math.ceil(text.length / 180)));
+        element.textContent = text.slice(0, offset);
+        if (offset < text.length) setTimeout(write, 12);
+        else element.classList.remove('hud-cursor');
+      };
+      write();
+    }
+    async function loadEntityVisuals(name) {
+      const container = document.querySelector('#entityVisuals');
+      if (!container) return;
+      try {
+        const auth = token() ? {Authorization: `Bearer ${token()}`} : {};
+        const result = await fetch(`/v1/knowledge/entity/${encodeURIComponent(name)}/visuals?ontology=${encodeURIComponent(ontology.value)}`, {headers: auth});
+        if (!result.ok) throw new Error('No pictures found');
+        const data = await result.json();
+        if (!data.visuals.length) {
+          container.innerHTML = '<span style="color:#536887">No pictures extracted for this entity.</span>';
+          return;
+        }
+        container.innerHTML = `<div style="color:#9fb0d0;margin-bottom:8px">📷 ${data.visuals.length} picture${data.visuals.length > 1 ? 's' : ''}:</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">
+            ${data.visuals.map(v => `<div style="background:#0c1324;border-radius:8px;overflow:hidden;border:1px solid #1e2a44">
+              <img data-image-url="${v.image_url}" style="width:100%;height:120px;object-fit:cover;display:block" loading="lazy" />
+              <div style="padding:8px;font-size:11px;color:#aebbd1">
+                <div style="color:#9fb0d0;margin-bottom:4px">Page ${v.page}</div>
+                <div style="max-height:60px;overflow:hidden">${v.caption.slice(0, 120)}${v.caption.length > 120 ? '…' : ''}</div>
+              </div>
+            </div>`).join('')}
+          </div>`;
+        await Promise.all([...container.querySelectorAll('img[data-image-url]')].map(async image => {
+          image.src = await authenticatedImageUrl(image.dataset.imageUrl);
+        }));
+      } catch (error) {
+        container.innerHTML = `<span style="color:#536887">No pictures: ${error.message}</span>`;
+      }
     }
     async function loadOntologies() {
       try {
@@ -187,6 +1259,8 @@
       ontologyTypes = Object.fromEntries(selected.entity_types.map(item => [item.id, item]));
       typeFilter.replaceChildren(new Option('All types', ''));
       selected.entity_types.forEach(item => typeFilter.add(new Option(item.label, item.id)));
+      typeFilter.add(new Option('Ontology categories', 'category'));
+      await loadDashboard();
       await browse();
     }
     async function initialize() {
@@ -199,6 +1273,27 @@
         else status('Log in or create an account to explore the graph.');
       } catch (error) { status(error.message); }
     }
+    function enableMovableDetails() {
+      let drag = null;
+      details.addEventListener('pointerdown', event => {
+        if (!event.target.closest('.details-handle')) return;
+        const bounds = details.getBoundingClientRect();
+        drag = {x: event.clientX - bounds.left, y: event.clientY - bounds.top};
+        details.setPointerCapture(event.pointerId);
+      });
+      details.addEventListener('pointermove', event => {
+        if (!drag) return;
+        details.style.right = 'auto';
+        details.style.left = `${Math.max(0, Math.min(innerWidth - details.offsetWidth, event.clientX - drag.x))}px`;
+        details.style.top = `${Math.max(0, Math.min(innerHeight - 40, event.clientY - drag.y))}px`;
+      });
+      details.addEventListener('pointerup', event => {
+        drag = null;
+        if (details.hasPointerCapture(event.pointerId)) details.releasePointerCapture(event.pointerId);
+      });
+    }
+    addEventListener('beforeunload', () => imageUrls.forEach(url => URL.revokeObjectURL(url)));
+    enableMovableDetails();
     initialize();
   </script>
 </body>

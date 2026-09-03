@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: agentic-cubestore-data}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 2Gi}}
+---
+apiVersion: platform.cube.dev/v1alpha1
+kind: CubeCluster
+metadata: {name: agentic-analytics}
+spec:
+  image: cubejs/cube:v1.7.20@sha256:7f14f4be9f3303afe48a16584480c8a9dc15f44c13daf66c2a5b31019025b71a
+  imagePullPolicy: IfNotPresent
+  modelConfigMap: agentic-cube-model
+  configurationSecret: cube-configuration
+  api: {replicas: 1}
+  refreshWorker: {replicas: 1}
+  cubeStore:
+    mode: single
+    image: cubejs/cubestore:v1.7.20@sha256:cd5fe68049204640704a6412a39e7a09eb391fc70890577dd21b5480d85cb219
+    remoteStorage:
+      type: persistentVolume
+      persistentVolume: {existingClaim: agentic-cubestore-data}
+    scratch: {size: 1Gi}
+  service: {type: ClusterIP}

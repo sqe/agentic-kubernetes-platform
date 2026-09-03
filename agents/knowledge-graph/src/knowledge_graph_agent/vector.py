@@ -1,3 +1,6 @@
+import hashlib
+import math
+import re
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -44,7 +47,11 @@ class VectorStore:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.qdrant_url and self.embedding_url and self.embedding_model)
+        return bool(
+            self.qdrant_url
+            and self.embedding_model
+            and (self.embedding_url or self.embedding_model == "local-hash-v1")
+        )
 
     async def close(self) -> None:
         if self._owns_qdrant:
@@ -53,6 +60,8 @@ class VectorStore:
             await self.embedding.aclose()
 
     async def _embed(self, texts: list[str]) -> list[list[float]]:
+        if self.embedding_model == "local-hash-v1":
+            return [self._local_embedding(text) for text in texts]
         if not self.embedding_url or not self.embedding_model:
             raise RuntimeError("EMBEDDING_BASE_URL and EMBEDDING_MODEL are required")
         response = await self.embedding.post(
@@ -63,6 +72,20 @@ class VectorStore:
         response.raise_for_status()
         rows = sorted(response.json()["data"], key=lambda item: item["index"])
         return [row["embedding"] for row in rows]
+
+    @staticmethod
+    def _local_embedding(text: str, dimensions: int = 384) -> list[float]:
+        """Cheap deterministic lexical embedding for local demos without another model."""
+        words = re.findall(r"[\w-]+", text.casefold())
+        features = words + [
+            word[index : index + 3] for word in words for index in range(len(word) - 2)
+        ]
+        vector = [0.0] * dimensions
+        for feature in features:
+            digest = hashlib.sha256(feature.encode()).digest()
+            vector[int.from_bytes(digest[:4], "big") % dimensions] += 1 if digest[4] & 1 else -1
+        norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+        return [value / norm for value in vector]
 
     async def _ensure_collection(self, dimensions: int) -> None:
         response = await self.qdrant.get(
@@ -127,7 +150,12 @@ class VectorStore:
         return len(points)
 
     async def search(
-        self, tenant: str, query: str, limit: int = 10, ontology: str | None = None
+        self,
+        tenant: str,
+        query: str,
+        limit: int = 10,
+        ontology: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if not self.enabled:
             raise RuntimeError("Qdrant semantic search is not configured")
@@ -135,6 +163,8 @@ class VectorStore:
         must: list[dict[str, Any]] = [{"key": "tenant", "match": {"value": tenant}}]
         if ontology:
             must.append({"key": "ontology", "match": {"value": ontology}})
+        if document_ids:
+            must.append({"key": "document_id", "match": {"any": document_ids}})
         response = await self.qdrant.post(
             f"{self.qdrant_url}/collections/{self.collection}/points/query",
             headers=self.qdrant_headers,

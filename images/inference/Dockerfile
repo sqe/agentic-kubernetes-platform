@@ -1,5 +1,5 @@
 # vLLM includes CUDA kernels, an OpenAI-compatible API, tensor parallelism, and prefix caching.
-ARG VLLM_VERSION=v0.10.1.1
+ARG VLLM_VERSION=v0.17.0
 FROM vllm/vllm-openai:${VLLM_VERSION}
 ENV HF_HOME=/models/.huggingface \
     VLLM_WORKER_MULTIPROC_METHOD=spawn

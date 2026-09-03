@@ -4,6 +4,12 @@ serviceAccount: {create: true, name: "", annotations: {}}
 kafka: {bootstrapServers: "", securityProtocol: PLAINTEXT}
 mlflow: {trackingUri: ""}
 services:
+  analytics:
+    replicas: 0
+    port: 8300
+    agentEndpoint: "http://platform-agentic-platform-analytics:8300"
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}]
+    resources: {requests: {cpu: 50m, memory: 96Mi}, limits: {cpu: 500m, memory: 256Mi}}
   registry:
     replicas: 1
     port: 8001
@@ -20,9 +26,17 @@ services:
     port: 8100
     envFrom: [{secretRef: {name: platform-runtime-secrets}}]
     resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+  vision:
+    replicas: 0
+    port: 8400
+    agentEndpoint: "http://platform-agentic-platform-vision:8400"
+    envFrom: [{secretRef: {name: platform-runtime-secrets}}]
+    resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
   knowledge-api:
     replicas: 1
     port: 8200
+    temporaryStorage: true
+    temporaryStorageSize: 1Gi
     envFrom: [{secretRef: {name: platform-runtime-secrets}}, {secretRef: {name: knowledge-runtime-secrets}}]
     extraEnv:
       - {name: NEO4J_URI, value: "bolt://neo4j:7687"}
@@ -76,6 +90,7 @@ keycloak:
   postgresImage: "postgres:17.6-alpine"
   storage: 10Gi
   storageClassName: ""
+  realmImport: {enabled: false, realm: agentic-platform, clientId: knowledge-graph-ui, publicUrl: ""}
 monitoring: {serviceMonitor: {enabled: false}}
 networkPolicy: {enabled: false}
 gateway:

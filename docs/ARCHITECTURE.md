@@ -18,7 +18,7 @@
 ```mermaid
 flowchart TB
     subgraph Experience[Experience layer]
-        UI[Graph UI] --- Slack[Slack App Home] --- Clients[API and MCP clients]
+        UI[Conversation and graph UIs] --- Slack[Slack App Home] --- Clients[API and MCP clients]
     end
     subgraph Edge[Edge and identity]
         Gateway[Cilium Gateway API and Envoy] --- IdP[Cognito or Keycloak]
@@ -27,11 +27,14 @@ flowchart TB
         Native[Native supervisor and registry] --- Fleet[Model Fleet supervisor and operator]
     end
     subgraph Runtime[Messaging and specialists]
-        Kafka[(Kafka JSON-RPC)] --> Agents[Weather, graph, and custom agents]
+        Kafka[(Kafka JSON-RPC)] --> Agents[Weather, vision, graph, and custom agents]
+        Kafka --> Analytics[Cube analytics specialist]
         Redis[(Redis cache)]
     end
     subgraph Data[Models and durable data]
         Models[vLLM and training] --- Stores[(PostgreSQL, Qdrant, Neo4j, S3 or RustFS)]
+        Analytics --> Cube[Operator-managed Cube Core]
+        Cube --> Stores
     end
     subgraph Capacity[Capacity]
         Compute[EKS or Proxmox/K3s NVIDIA nodes] --- Scaling[KEDA and node scaling]
@@ -47,6 +50,15 @@ exact JSON-RPC method. See [Model Fleet integration](MODEL_FLEET_INTEGRATION.md)
 The native route can use a fixed OpenAI-compatible BYOM endpoint, but validates
 its choice against the registry before Kafka dispatch. See
 [Bring your own model or agent](BRING_YOUR_OWN.md).
+
+The conversation dashboard persists prompts before dispatch, correlates
+`results.*` messages by JSON-RPC ID, and exposes revocable read-only links. See
+[conversation dashboard](DASHBOARD.md).
+
+Cube analytics uses the same task/result contract. The specialist applies the
+authenticated tenant filter and sends bounded semantic queries to Cube Core;
+the Cube operator reconciles its API, refresh worker, and Cube Store. See
+[Cube operator and agent-to-agent BI](CUBE_ANALYTICS.md).
 
 ## Request and result path
 
@@ -98,14 +110,21 @@ flowchart LR
     API -->|URI and metadata| Kafka[(tasks.knowledge)]
     Kafka --> Worker[Scale-to-zero extraction worker]
     Objects --> Worker
-    Worker --> LLM[OpenAI-compatible LLM]
+    Worker -->|PDF page render| VisionTopic[(tasks.vision)]
+    VisionTopic --> Vision[Qwen3-VL vision agent]
+    Vision -->|captions, OCR, diagrams| Worker
+    Worker --> LLM[OpenAI-compatible text LLM]
     LLM --> Validate[Ontology normalization and validation]
     Validate --> Neo4j[(Neo4j graph)]
     Validate --> Qdrant[(Qdrant vectors)]
+    Validate --> Artifacts[(S3 or RustFS<br/>text, graph JSON, cropped pictures)]
     Validate -->|Invalidate generation| Redis[(Redis)]
     Neo4j --> Query[Search, neighbors, and shortest path]
     Qdrant --> Query
     Query --> View[2D and 3D graph explorer]
+    Artifacts -->|authenticated cropped thumbnails| View
+    View --> Map[ForceAtlas, neighborhood, and fractal views]
+    View --> HUD[Optional draggable target HUD]
 ```
 
 Why it is useful: a graph preserves named entities, provenance evidence, and
@@ -113,6 +132,25 @@ multi-hop relationships that vector similarity alone obscures. Agents can call
 `graph.search`, `graph.visualize`, `graph.neighbors`, and `graph.path` MCP tools to explain how two
 concepts connect. The JWST example can trace observatory components, instruments,
 control systems, catalogs, and viewing constraints.
+
+Extracted PDF pictures are sent through Kafka to the independently scalable
+`vision.describe` agent. The extractor skips text-only pages and crops the largest
+embedded picture with page/bounding-box provenance. Qwen3-VL captions pictures
+and transcribes labels, tables, and chart axes. Page-numbered visual evidence is appended to
+the extracted text before ontology extraction and vector indexing, so Neo4j
+and Qdrant both retain visual knowledge without coupling the workers by HTTP.
+
+Extraction also consolidates confidently expanded aliases within the same
+ontology and type, rewiring existing relationships to the canonical entity
+while retaining alias names and provenance. Ambiguous abbreviations remain
+separate. Explicit ontology category hubs organize every entity—including
+otherwise unlinked discoveries—using provenance-scoped `classified_as` edges.
+The explorer uses a force-directed atlas by default and can redraw a two-hop
+neighborhood around a selection. Selected targets shift left to preserve canvas
+space for an optional draggable details HUD. Protected caption-matched pictures
+render inside 2D nodes and remain visible while zooming. Complete-graph mode is
+explicit, preventing dense document/category nodes from making focused 2D or 3D
+views unreadable.
 
 Qdrant adds semantic candidate retrieval without replacing graph truth. A
 hybrid agent can find relevant document chunks by vector similarity, traverse
@@ -152,6 +190,13 @@ Service receives an NLB. On bare metal, MetalLB assigns a LAN address to the sam
 Service. HTTPRoutes expose only `/v1/tasks`, `/knowledge`, `/v1/knowledge`,
 `/v1/users`, and `/mcp`; Kafka, Redis, Neo4j, model servers, agents, and object
 stores stay private.
+
+Prometheus discovers platform, Kafka, Kubernetes, and Cube targets through
+ServiceMonitors. Grafana is the only monitoring UI routed by Cilium, under
+`/grafana`; the pre-provisioned dashboard combines agent readiness, Kafka lag,
+Cube readiness, CPU, and memory without exposing Prometheus or Cube directly.
+Agent-facing governed Cube queries remain in `/dashboard` through
+`analytics.usage` and `analytics.errors`; Cube Core runs without a public UI.
 
 The knowledge UI uses OIDC Authorization Code with PKCE. Cognito is provisioned
 with AWS Terraform; Keycloak and PostgreSQL run in the bare-metal chart and its

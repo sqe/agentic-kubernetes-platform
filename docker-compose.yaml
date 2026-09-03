@@ -33,7 +33,7 @@ services:
     volumes: [qdrant-data:/qdrant/storage]
     ports: ["127.0.0.1:6333:6333", "127.0.0.1:6334:6334"]
   rustfs:
-    image: rustfs/rustfs:v1.0.0
+    image: rustfs/rustfs@sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21
     command: [/data]
     environment:
       RUSTFS_ACCESS_KEY: local-access-key
@@ -63,12 +63,17 @@ services:
     ports: ["8001:8001"]
   supervisor:
     build: {context: ., dockerfile: images/runtime/Dockerfile}
-    depends_on: [registry, redpanda]
+    depends_on:
+      postgresql: {condition: service_healthy}
+      registry: {condition: service_started}
+      redpanda: {condition: service_started}
     environment:
       SERVICE: supervisor
       PORT: "8002"
       REGISTRY_URL: http://registry:8001
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      POSTGRES_URL: postgresql://agents:local-development-password@postgresql:5432/agents
+      AUTH_DISABLED: "true"
       LLM_GATEWAY_URL: ${LLM_GATEWAY_URL:-}
       LLM_GATEWAY_MODEL: ${LLM_GATEWAY_MODEL:-}
       LLM_GATEWAY_API_KEY: ${LLM_GATEWAY_API_KEY:-}

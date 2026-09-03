@@ -1,0 +1,60 @@
+# kube-prometheus-stack values tuned for the local kind cluster.
+# Install: helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#   --kube-context kind-agentic-platform -n monitoring --create-namespace -f values-monitoring.yaml
+fullnameOverride: monitoring
+
+alertmanager:
+  alertmanagerSpec:
+    retention: 24h
+    resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 128Mi}}
+    storage: {volumeClaimTemplate: {spec: {resources: {requests: {storage: 1Gi}}}}}
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    scrapeInterval: 15s
+    resources: {requests: {cpu: 50m, memory: 256Mi}, limits: {memory: 1Gi}}
+    storageSpec: {volumeClaimTemplate: {spec: {resources: {requests: {storage: 4Gi}}}}}
+    # Pick up ServiceMonitors/PodMonitors from ANY namespace regardless of release labels.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector: {}
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    # Scrape the macOS host (node_exporter on the Mac serves CPU/mem/disk of the
+    # machine running the MLX model servers) via kind's host gateway alias.
+    additionalScrapeConfigs:
+      - job_name: macos-host
+        static_configs:
+          - targets: ["host.docker.internal:9100"]
+
+grafana:
+  adminPassword: agentic-admin
+  defaultDashboardsEnabled: true
+  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 512Mi}}
+  service:
+    type: ClusterIP
+  testFramework: {enabled: false}
+  grafana.ini:
+    server:
+      # Served under /grafana behind the Cilium gateway at http://127.0.0.1:8080/grafana
+      root_url: "http://127.0.0.1:8080/grafana"
+      serve_from_sub_path: true
+    auth.anonymous:
+      enabled: false
+  persistence:
+    enabled: true
+    storageClassName: standard
+    size: 1Gi
+
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true
+prometheusOperator:
+  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 256Mi}}
+  # Local Kind does not need an operator TLS listener. Disabling only admission
+  # webhooks still leaves the Deployment waiting for a certificate Secret.
+  tls: {enabled: false}
+  admissionWebhooks: {enabled: false}

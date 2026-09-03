@@ -47,6 +47,7 @@ spec:
           env:
             - name: QDRANT__SERVICE__API_KEY
               valueFrom: {secretKeyRef: {name: {{ .Values.qdrant.existingSecret }}, key: api-key}}
+            - {name: QDRANT__STORAGE__SNAPSHOTS_PATH, value: /qdrant/storage/snapshots}
           readinessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 5, periodSeconds: 10}
           livenessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 20}
           resources:

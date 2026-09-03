@@ -142,8 +142,8 @@ class FakeDispatcher:
     async def dispatch(self, request):
         return {"id": request.id, "result": {"status": "accepted"}}
 
-    async def route(self, request):
-        return {"result": {"status": "accepted", "prompt": request.prompt}}
+    async def route(self, request, task_id=None):
+        return {"result": {"status": "accepted", "prompt": request.prompt, "skill": "test.run"}}
 
 
 def test_supervisor_api():
@@ -153,4 +153,5 @@ def test_supervisor_api():
             == "accepted"
         )
         assert client.post("/v1/route", json={"prompt": "run"}).status_code == 200
+        assert client.get("/dashboard").status_code == 200
         assert client.get("/health").status_code == 200

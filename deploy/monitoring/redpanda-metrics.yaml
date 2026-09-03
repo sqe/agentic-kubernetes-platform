@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-metrics
+  namespace: messaging
+  labels:
+    app.kubernetes.io/part-of: messaging
+spec:
+  selector:
+    app: kafka
+  ports:
+    - name: redpanda-admin
+      port: 9644
+      targetPort: 9644
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: redpanda
+  namespace: messaging
+  labels:
+    app.kubernetes.io/part-of: messaging
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: messaging
+  endpoints:
+    - port: redpanda-admin
+      path: /metrics
+      interval: 15s

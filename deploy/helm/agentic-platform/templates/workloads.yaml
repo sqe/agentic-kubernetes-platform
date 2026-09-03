@@ -49,7 +49,7 @@ spec:
             - {name: SERVICE, value: {{ $name | quote }}}
             - {name: PORT, value: {{ $config.port | quote }}}
             - {name: REGISTRY_URL, value: "http://{{ include "agentic-platform.fullname" $root }}-registry:8001"}
-            - {name: AGENT_ENDPOINT, value: "http://{{ include "agentic-platform.fullname" $root }}-weather:8100"}
+            - {name: AGENT_ENDPOINT, value: {{ default (printf "http://%s-weather:8100" (include "agentic-platform.fullname" $root)) $config.agentEndpoint | quote }}}
             - {name: KNOWLEDGE_AGENT_ENDPOINT, value: "http://{{ include "agentic-platform.fullname" $root }}-knowledge-api:8200"}
             {{- if $root.Values.kafka.bootstrapServers }}
             - {name: KAFKA_BOOTSTRAP_SERVERS, value: {{ $root.Values.kafka.bootstrapServers | quote }}}
@@ -73,6 +73,15 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
             readOnlyRootFilesystem: true
+          {{- if $config.temporaryStorage }}
+          volumeMounts:
+            - {name: temporary-storage, mountPath: /tmp}
+          {{- end }}
+      {{- if $config.temporaryStorage }}
+      volumes:
+        - name: temporary-storage
+          emptyDir: {sizeLimit: {{ $config.temporaryStorageSize | default "1Gi" | quote }}}
+      {{- end }}
       {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

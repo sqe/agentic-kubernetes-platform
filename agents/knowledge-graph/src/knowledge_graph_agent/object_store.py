@@ -4,8 +4,12 @@ from pathlib import PurePosixPath
 from typing import BinaryIO
 
 import boto3
+from boto3.s3.transfer import TransferConfig
+from botocore.exceptions import BotoCoreError, ClientError
 
 from platform_runtime.settings import settings
+
+UPLOAD_CONFIG = TransferConfig(multipart_threshold=64 * 1024 * 1024)
 
 
 class ObjectStore:
@@ -24,13 +28,17 @@ class ObjectStore:
         tenant_key = hashlib.sha256(tenant.encode()).hexdigest()[:24]
         safe_name = PurePosixPath(filename).name.replace(" ", "_")
         key = str(PurePosixPath("documents", tenant_key, document_id, safe_name))
-        await asyncio.to_thread(
-            self.client.upload_fileobj,
-            body,
-            self.bucket,
-            key,
-            ExtraArgs={"ContentType": content_type, "ServerSideEncryption": "AES256"},
-        )
+        try:
+            await asyncio.to_thread(
+                self.client.upload_fileobj,
+                body,
+                self.bucket,
+                key,
+                ExtraArgs={"ContentType": content_type, "ServerSideEncryption": "AES256"},
+                Config=UPLOAD_CONFIG,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise RuntimeError("Document storage is unavailable") from exc
         return f"s3://{self.bucket}/{key}"
 
     async def download(self, uri: str) -> tuple[bytes, str]:

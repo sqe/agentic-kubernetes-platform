@@ -17,9 +17,12 @@ dependencies = [
   "httpx>=0.27,<1",
   "neo4j>=5.28,<7",
   "prometheus-client>=0.21,<1",
+  "pillow>=11,<13",
+  "pypdfium2>=4.30,<6",
   "pypdf>=6,<7",
   "pyjwt[crypto]>=2.10,<3",
   "pydantic-settings>=2.7,<3",
+  "python-snappy>=0.7,<1",
   "python-multipart>=0.0.20,<1",
   "redis[hiredis]>=6,<7",
   "uvicorn[standard]>=0.34,<1",
@@ -38,14 +41,16 @@ test = [
 [tool.hatch.build.targets.wheel]
 packages = [
   "src/platform_runtime",
+  "agents/analytics/src/analytics_agent",
   "agents/weather/src/weather_agent",
   "agents/knowledge-graph/src/knowledge_graph_agent",
+  "agents/vision/src/vision_agent",
   "services/registry/src/registry_service",
   "services/supervisor/src/supervisor_service",
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=platform_runtime --cov=weather_agent --cov=knowledge_graph_agent --cov=registry_service --cov=supervisor_service --cov-report=term-missing --cov-fail-under=80"
+addopts = "--cov=platform_runtime --cov=analytics_agent --cov=weather_agent --cov=knowledge_graph_agent --cov=registry_service --cov=supervisor_service --cov-report=term-missing --cov-fail-under=80"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 

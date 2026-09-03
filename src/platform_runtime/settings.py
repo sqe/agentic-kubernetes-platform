@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     openai_base_url: str | None = None
     openai_api_key: str | None = None
     openai_model: str | None = None
+    vision_agent_endpoint: str = "http://vision:8400"
+    vision_base_url: str | None = None
+    vision_model: str | None = None
+    vision_api_key: str | None = None
+    vision_timeout_seconds: int = 300
     llm_gateway_url: str | None = None
     llm_gateway_model: str | None = None
     llm_gateway_api_key: str | None = None
@@ -47,8 +52,12 @@ class Settings(BaseSettings):
     embedding_chunk_chars: int = 6_000
     knowledge_chunk_chars: int = 24_000
     knowledge_max_chunks: int = 40
+    knowledge_max_output_tokens: int = 2_048
+    knowledge_visual_page_limit: int = 100
     redis_url: str | None = None
     cache_ttl_seconds: int = 300
+    cube_url: str = "http://agentic-analytics-api:4000"
+    cube_api_secret: str | None = None
 
 
 settings = Settings()
